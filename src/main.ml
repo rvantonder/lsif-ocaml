@@ -2,6 +2,8 @@ open Core
 
 module Time = Core_kernel.Time_ns.Span
 
+let debug = false
+
 module Export = struct
   type content =
     { language : string
@@ -22,6 +24,7 @@ module Export = struct
   type result =
     | Hover of hover
     | Range of { start : location; end_ : location }
+    | Edge of { out_v : string; in_v : string }
     | Nothing
   [@@deriving yojson]
 
@@ -63,7 +66,7 @@ let read_source_from_stdin args source =
   Out_channel.close stdin;
   let result = read_with_timeout [stdout; stderr] in
   let finished = Unix.waitpid pid in
-  let _debug = Format.printf "Fin: %s@." @@ Pid.to_string pid in
+  if debug then Format.printf "Fin: %s@." @@ Pid.to_string pid;
   result
 
 let call_merlin ~filename ~line ~character =
@@ -77,6 +80,29 @@ let call_merlin ~filename ~line ~character =
 let to_lsif merlin_results : Export.entry list =
   let open Export in
   List.fold merlin_results ~init:[] ~f:(fun acc result ->
+      let open Yojson.Safe.Util in
+      if debug then Format.printf "Result: %s@." result;
+      let json = Yojson.Safe.from_string result in
+      Format.printf "json: %s@." @@ Yojson.Safe.pretty_to_string json;
+      let start_line, start_character, end_line, end_character, type_ =
+        json |> member "value" |>
+        function
+        | `List (hd::[])
+        | `List (hd::_) ->
+          let start = hd |> member "start" in
+          let start_line = start |> member "line" in
+          let start_character = start |> member "col" in
+          let end_ = hd |> member "end" in
+          let end_line = end_ |> member "line" in
+          let end_character = end_ |> member "col" in
+          let type_ = hd |> member "type" in
+          start_line, end_character, end_line, end_character, type_
+        | `List [] ->
+          Format.printf "Empty list@.";
+          `String "", `String "", `String "", `String "", `String ""
+        | _ ->
+          failwith "other"
+      in
       let result_set_vertex =
         { id = -1
         ; entry_type = "vertex"
@@ -84,18 +110,50 @@ let to_lsif merlin_results : Export.entry list =
         ; result = Nothing
         }
       in
+      let hover_edge =
+        { id = -1
+        ; entry_type = "edge"
+        ; label = "next"
+        ; result =
+            Edge
+              { out_v = "out_v"
+              ; in_v = "in_"
+              }
+        }
+      in
       let range_vertex =
         { id = -1
         ; entry_type = "vertex"
         ; label = "range"
-        ; result = Range
+        ; result =
+            let start_line =
+              try
+                Yojson.Safe.to_string start_line |> Int.of_string
+              with _ -> -1
+            in
+            let start_character =
+              try
+                Yojson.Safe.to_string start_character |> Int.of_string
+              with _ -> -1
+            in
+            let end_line =
+              try
+                Yojson.Safe.to_string end_line |> Int.of_string
+              with _ -> -1
+            in
+            let end_character =
+              try
+                Yojson.Safe.to_string end_character |> Int.of_string
+              with _ -> -1
+            in
+            Range
               { start =
-                  { line = -1
-                  ; character = -1
+                  { line = start_line
+                  ; character = start_character
                   }
               ; end_ =
-                  { line = -1
-                  ; character = -1
+                  { line = end_line
+                  ; character = end_character
                   }
               }
         }
@@ -103,17 +161,20 @@ let to_lsif merlin_results : Export.entry list =
       let json = Yojson.Safe.from_string result in
       let type_info = "" in
       let range = "..." in
-      { id = -1
-      ; entry_type = "vertex"
-      ; label = "hoverResult"
-      ; result =
-          Hover
-            { contents = [
-                  { language = "OCaml"
-                  ; value = type_info
-                  }
-                ] }
-      }::acc)
+      let type_info_vertex =
+        { id = -1
+        ; entry_type = "vertex"
+        ; label = "hoverResult"
+        ; result =
+            Hover
+              { contents = [
+                    { language = "OCaml"
+                    ; value = type_info
+                    }
+                  ] }
+        }
+      in
+      range_vertex::type_info_vertex::acc)
 
 
 let process_file filename =
@@ -125,6 +186,7 @@ let process_file filename =
     List.foldi line_lengths ~init:[] ~f:(fun line acc length ->
         List.fold (List.range 0 length) ~init:acc ~f:(fun acc character ->
             (call_merlin ~filename ~line:(line+1) ~character)::acc))
+    (* remove timing and notifications fields *)
     |> List.dedup ~compare:String.compare
   in
   let result =

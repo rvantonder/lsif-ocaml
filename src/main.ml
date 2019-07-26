@@ -26,11 +26,18 @@ module Export = struct
     | Range of { start : location; end_ : location }
     | Edge of { out_v : string; in_v : string }
     | Nothing
-  [@@deriving yojson]
+
+  let result_to_yojson = function
+    | Hover contents -> hover_to_yojson contents
+    | Range _
+    | Edge _
+    | Nothing -> `Null
+
+  let result_of_yojson _ = assert false
 
   type entry =
     { id : int
-    ; entry_type : string
+    ; entry_type : string [@key "type"]
     ; label : string
     ; result : result
     }
@@ -83,7 +90,7 @@ let to_lsif merlin_results : Export.entry list =
       let open Yojson.Safe.Util in
       if debug then Format.printf "Result: %s@." result;
       let json = Yojson.Safe.from_string result in
-      Format.printf "json: %s@." @@ Yojson.Safe.pretty_to_string json;
+      if debug then Format.printf "json: %s@." @@ Yojson.Safe.pretty_to_string json;
       let start_line, start_character, end_line, end_character, type_ =
         json |> member "value" |>
         function
@@ -96,7 +103,7 @@ let to_lsif merlin_results : Export.entry list =
           let end_line = end_ |> member "line" in
           let end_character = end_ |> member "col" in
           let type_ = hd |> member "type" in
-          start_line, end_character, end_line, end_character, type_
+          start_line, start_character, end_line, end_character, type_
         | `List [] ->
           Format.printf "Empty list@.";
           `String "", `String "", `String "", `String "", `String ""
@@ -159,8 +166,7 @@ let to_lsif merlin_results : Export.entry list =
         }
       in
       let json = Yojson.Safe.from_string result in
-      let type_info = "" in
-      let range = "..." in
+      let type_info = Yojson.Safe.to_string type_ in
       let type_info_vertex =
         { id = -1
         ; entry_type = "vertex"
@@ -187,6 +193,12 @@ let process_file filename =
         List.fold (List.range 0 length) ~init:acc ~f:(fun acc character ->
             (call_merlin ~filename ~line:(line+1) ~character)::acc))
     (* remove timing and notifications fields *)
+    |> List.map ~f:(fun s ->
+        let open Yojson.Safe.Util in
+        let json = Yojson.Safe.from_string s in
+        let class_ = json |> member "class" in
+        let value = json |> member "value" in
+        Yojson.Safe.to_string @@ `Assoc ["class", class_; "value", value])
     |> List.dedup ~compare:String.compare
   in
   let result =

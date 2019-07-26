@@ -1,0 +1,12 @@
+(executables
+ (libraries core ppx_deriving_yojson ppx_deriving_yojson.runtime) 
+ (preprocess (pps ppx_deriving_yojson ppx_let ppx_deriving.show))
+ (names main))
+
+(alias
+ (name DEFAULT)
+ (deps main.exe))
+
+(install
+ (section bin)
+ (files (main.exe as main)))

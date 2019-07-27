@@ -35,19 +35,11 @@ module Export = struct
     }
   [@@deriving yojson]
 
-  type range =
-    { start : location
-    ; end_ : location [@key "end"]
-    }
-  [@@deriving yojson]
-
   type result =
     | Hover of hover
-    | Range of range
 
   let result_to_yojson = function
     | Hover contents -> hover_to_yojson contents
-    | Range range -> range_to_yojson range
 
   let result_of_yojson _ = assert false
 
@@ -122,7 +114,7 @@ let connect ?in_v ?out_v ~label =
   ; entry_type = "edge"
   ; label
   ; out_v
-  ; in_v
+  ; in_vs = Some [Option.value_exn in_v]
   }
 
 let read_with_timeout read_from_channels =
@@ -215,17 +207,14 @@ let to_lsif merlin_results : Export.entry list =
             id = Int.to_string (fresh ())
           ; entry_type = "vertex"
           ; label = "range"
-          ; result =
-              Some (Range
-                      { start =
-                          { line = start_line - 1
-                          ; character = start_character
-                          }
-                      ; end_ =
-                          { line = end_line - 1
-                          ; character = end_character
-                          }
-                      })
+          ; start = Some
+                { line = start_line - 1
+                ; character = start_character
+                }
+          ; end_ = Some
+                { line = end_line -1
+                ; character = end_character
+                }
           }
       in
       let json = Yojson.Safe.from_string result in
@@ -307,8 +296,9 @@ let print_header () =
   ; entry_type = "vertex"
   ; label = "metaData"
   ; version = Some "0.4.0"
-  ; project_root = Some (Sys.getcwd ())
+  ; project_root = Some ("file://"^Sys.getcwd ())
   ; tool_info = Some { name = "lsif-ocaml"; version = "0.1.0" }
+  ; position_encoding = Some "utf-16"
   }
   |> Export.entry_to_yojson
   |> Yojson.Safe.to_string

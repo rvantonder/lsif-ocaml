@@ -4,6 +4,13 @@ module Time = Core_kernel.Time_ns.Span
 
 let debug = false
 
+let i : int ref = ref 0
+
+let fresh () =
+  let id = !i in
+  i := !i + 1;
+  id
+
 module Export = struct
   type content =
     { language : string
@@ -21,17 +28,27 @@ module Export = struct
     }
   [@@deriving yojson]
 
+  type range =
+    { start : location
+    ; end_ : location [@key "end"]
+    }
+  [@@deriving yojson]
+
+  type edge =
+    { out_v : string [@key "outV"]
+    ; in_v : string [@key "inV"]
+    }
+  [@@deriving yojson]
+
   type result =
     | Hover of hover
-    | Range of { start : location; end_ : location }
-    | Edge of { out_v : string; in_v : string }
-    | Nothing
+    | Range of range
+    | Edge of edge
 
   let result_to_yojson = function
+    | Edge edge -> edge_to_yojson edge
     | Hover contents -> hover_to_yojson contents
-    | Range _
-    | Edge _
-    | Nothing -> `Null
+    | Range range -> range_to_yojson range
 
   let result_of_yojson _ = assert false
 
@@ -39,7 +56,7 @@ module Export = struct
     { id : int
     ; entry_type : string [@key "type"]
     ; label : string
-    ; result : result
+    ; result : result option [@default None]
     }
   [@@deriving yojson]
 end
@@ -110,77 +127,88 @@ let to_lsif merlin_results : Export.entry list =
         | _ ->
           failwith "other"
       in
+      let result_set_id = fresh () in
       let result_set_vertex =
-        { id = -1
+        { id = result_set_id
         ; entry_type = "vertex"
         ; label = "resultSet"
-        ; result = Nothing
-        }
-      in
-      let hover_edge =
-        { id = -1
-        ; entry_type = "edge"
-        ; label = "next"
-        ; result =
-            Edge
-              { out_v = "out_v"
-              ; in_v = "in_"
-              }
+        ; result = None
         }
       in
       let range_vertex =
-        { id = -1
-        ; entry_type = "vertex"
-        ; label = "range"
-        ; result =
-            let start_line =
-              try
-                Yojson.Safe.to_string start_line |> Int.of_string
-              with _ -> -1
-            in
-            let start_character =
-              try
-                Yojson.Safe.to_string start_character |> Int.of_string
-              with _ -> -1
-            in
-            let end_line =
-              try
-                Yojson.Safe.to_string end_line |> Int.of_string
-              with _ -> -1
-            in
-            let end_character =
-              try
-                Yojson.Safe.to_string end_character |> Int.of_string
-              with _ -> -1
-            in
-            Range
-              { start =
-                  { line = start_line
-                  ; character = start_character
-                  }
-              ; end_ =
-                  { line = end_line
-                  ; character = end_character
-                  }
-              }
-        }
+        let open Option in
+        let read x =
+          try Yojson.Safe.to_string x |> Int.of_string |> Option.some with _ -> None
+        in
+        read start_line >>= fun start_line ->
+        read start_character >>= fun start_character ->
+        read end_line >>= fun end_line ->
+        read end_character >>= fun end_character ->
+        return
+          { id = fresh ()
+          ; entry_type = "vertex"
+          ; label = "range"
+          ; result =
+              Some (Range
+                      { start =
+                          { line = start_line - 1
+                          ; character = start_character
+                          }
+                      ; end_ =
+                          { line = end_line - 1
+                          ; character = end_character
+                          }
+                      })
+          }
       in
       let json = Yojson.Safe.from_string result in
       let type_info = Yojson.Safe.to_string type_ in
       let type_info_vertex =
-        { id = -1
+        { id = fresh ()
         ; entry_type = "vertex"
         ; label = "hoverResult"
         ; result =
-            Hover
-              { contents = [
-                    { language = "OCaml"
-                    ; value = type_info
-                    }
-                  ] }
+            Some (Hover
+                    { contents = [
+                          { language = "OCaml"
+                          ; value = type_info
+                          }
+                        ]
+                    })
         }
       in
-      range_vertex::type_info_vertex::acc)
+      (*
+      let hover_edge =
+        { id = fresh ()
+        ; entry_type = "edge"
+        ; label = "next"
+        ; result =
+            Some (Edge
+                    { out_v = "out_v"
+                    ; in_v = "in_"
+                    })
+        }
+      in
+      *)
+      match range_vertex with
+      | Some range_vertex ->
+        (* connect range (outV) to resultSet (inV) *)
+        let result_set_edge =
+          { id = fresh ()
+          ; entry_type = "edge"
+          ; label = "next"
+          ; result =
+              Some
+                (Edge
+                   { out_v = Int.to_string range_vertex.id
+                   ; in_v = Int.to_string result_set_vertex.id
+                   })
+          }
+        in
+        type_info_vertex::result_set_edge::range_vertex::result_set_vertex::acc
+      | None ->
+        acc)
+  |> List.rev
 
 
 let process_file filename =
@@ -188,7 +216,7 @@ let process_file filename =
     In_channel.read_lines filename
     |> List.map ~f:String.length
   in
-  let result =
+  let results =
     List.foldi line_lengths ~init:[] ~f:(fun line acc length ->
         List.fold (List.range 0 length) ~init:acc ~f:(fun acc character ->
             (call_merlin ~filename ~line:(line+1) ~character)::acc))
@@ -201,12 +229,10 @@ let process_file filename =
         Yojson.Safe.to_string @@ `Assoc ["class", class_; "value", value])
     |> List.dedup ~compare:String.compare
   in
-  let result =
-    to_lsif result
-    |> List.map ~f:Export.entry_to_yojson
-    |> List.map ~f:Yojson.Safe.to_string
-  in
-  Format.printf "Result: %s@." @@ String.concat ~sep:"\n" result
+  let results = to_lsif results in
+  List.iter results ~f:(fun entry ->
+      let entry = Export.entry_to_yojson entry in
+      Format.printf "%s@." @@ Yojson.Safe.to_string entry)
 
 let () =
   match Sys.argv |> Array.to_list with

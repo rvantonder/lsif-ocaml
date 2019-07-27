@@ -1,5 +1,5 @@
 (executables
- (libraries core ppx_deriving_yojson ppx_deriving_yojson.runtime) 
+ (libraries core core_extended.base64 ppx_deriving_yojson ppx_deriving_yojson.runtime) 
  (preprocess (pps ppx_deriving_yojson ppx_let ppx_deriving.show))
  (names main))
 

@@ -440,62 +440,57 @@ let () =
     let number_of_workers = if parallel then 4 else 1 in
     let scheduler = Scheduler.create ~number_of_workers () in
     let paths = paths root in
-    if not parallel then
-      let header = header () in
-      let project = project () in
-      Format.printf "%s@." @@ print header;
-      Format.printf "%s@." @@ print project;
-      (* do this in parallel *)
-      let results = List.fold paths ~init:[] ~f:(fun acc path ->
-          { filepath = path
-          ; hovers = process_filepath project.id path
-          }::acc)
-      in
-      (* do this sequentially *)
-      List.iter results ~f:(fun { filepath; hovers } ->
-          let document = document filepath in
-          let document = { document with id = Int.to_string (fresh ()) } in
-          Format.printf "%s@." @@ print document;
-          let document_in_project_edge =
-            connect ~out_v:project.id ~in_vs:[document.id] ~label:"contains" ()
-          in
-          Format.printf "%s@." @@ print document_in_project_edge;
-          let hovers =
-            List.concat_map hovers ~f:(fun { result_set_vertex; range_vertex; type_info_vertex } ->
-                let result_set_vertex = { result_set_vertex with id = Int.to_string (fresh ()) } in
-                let range_vertex = { range_vertex with id = Int.to_string (fresh ()) } in
-                (* connect range (outV) to resultSet (inV) *)
-                let result_set_edge =
-                  connect ~out_v:range_vertex.id ~in_v:result_set_vertex.id ~label:"next" ()
-                in
-                let type_info_vertex = { type_info_vertex with id = Int.to_string (fresh ()) } in
-                (* connect resultSet (outV) to hoverResult (inV) *)
-                let hover_edge =
-                  connect ~in_v:type_info_vertex.id ~out_v:result_set_vertex.id ~label:"textDocument/hover" ()
-                in
-                [result_set_vertex; range_vertex; result_set_edge; type_info_vertex; hover_edge]
-              )
-          in
-          List.iter hovers ~f:(fun entry -> Format.printf "%s@." @@ print entry);
-          let edges_entry = connect_ranges hovers document.id in
-          Format.printf "%s@." @@ print edges_entry)
-    else
-      (* Doesn't work yet: IDs across procs *)
-      let header = header () in
-      let project = project () in
-      Format.printf "%s@." @@ print header;
-      Format.printf "%s@." @@ print project;
-      let entries =
-        Scheduler.map_reduce
-          scheduler
-          paths
-          ~init:[]
-          ~map:(fun init paths -> List.map paths ~f:(process_filepath project.id))
-          ~reduce:List.append
-      in
-      begin
-        try Scheduler.destroy scheduler
-        with Unix.Unix_error (_,"kill",_) ->
-          (* No kill command on Mac OS X *)
-          ()
-      end
+    let header = header () in
+    let project = project () in
+    Format.printf "%s@." @@ print header;
+    Format.printf "%s@." @@ print project;
+    (* do this in parallel *)
+    (*
+    let entries =
+      Scheduler.map_reduce
+        scheduler
+        paths
+        ~init:[]
+        ~map:(fun init paths -> List.map paths ~f:(process_filepath project.id))
+        ~reduce:List.append
+    in
+       *)
+    let results = List.fold paths ~init:[] ~f:(fun acc path ->
+        { filepath = path
+        ; hovers = process_filepath project.id path
+        }::acc)
+    in
+    (* do this sequentially *)
+    List.iter results ~f:(fun { filepath; hovers } ->
+        let document = document filepath in
+        let document = { document with id = Int.to_string (fresh ()) } in
+        Format.printf "%s@." @@ print document;
+        let document_in_project_edge =
+          connect ~out_v:project.id ~in_vs:[document.id] ~label:"contains" ()
+        in
+        Format.printf "%s@." @@ print document_in_project_edge;
+        let hovers =
+          List.concat_map hovers ~f:(fun { result_set_vertex; range_vertex; type_info_vertex } ->
+              let result_set_vertex = { result_set_vertex with id = Int.to_string (fresh ()) } in
+              let range_vertex = { range_vertex with id = Int.to_string (fresh ()) } in
+              (* connect range (outV) to resultSet (inV) *)
+              let result_set_edge =
+                connect ~out_v:range_vertex.id ~in_v:result_set_vertex.id ~label:"next" ()
+              in
+              let type_info_vertex = { type_info_vertex with id = Int.to_string (fresh ()) } in
+              (* connect resultSet (outV) to hoverResult (inV) *)
+              let hover_edge =
+                connect ~in_v:type_info_vertex.id ~out_v:result_set_vertex.id ~label:"textDocument/hover" ()
+              in
+              [result_set_vertex; range_vertex; result_set_edge; type_info_vertex; hover_edge]
+            )
+        in
+        List.iter hovers ~f:(fun entry -> Format.printf "%s@." @@ print entry);
+        let edges_entry = connect_ranges hovers document.id in
+        Format.printf "%s@." @@ print edges_entry);
+    begin
+      try Scheduler.destroy scheduler
+      with Unix.Unix_error (_,"kill",_) ->
+        (* No kill command on Mac OS X *)
+        ()
+    end

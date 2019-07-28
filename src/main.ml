@@ -383,7 +383,7 @@ let () =
     Format.printf "%s@." @@ print project;
     Format.printf "%s@." @@ print document;
     let document_project_edge =
-      connect ~out_v:project.id ~in_v:document.id ~label:"contains" ()
+      connect ~out_v:project.id ~in_vs:[document.id] ~label:"contains" ()
     in
     Format.printf "%s@." @@ print document_project_edge;
     let results = process_file filepath in

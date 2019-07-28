@@ -151,6 +151,18 @@ module Import = struct
     }
 end
 
+(** Intermediate type so that edges and IDs can be connected after parallel vertex generation. *)
+type hover_result_vertices =
+  { result_set_vertex : Export.entry
+  ; range_vertex : Export.entry
+  ; type_info_vertex : Export.entry
+  }
+
+type filepath_hover_results =
+  { filepath : string
+  ; hovers : hover_result_vertices list
+  }
+
 let connect ?out_v ?in_v ?in_vs ~label () =
   if Option.is_some in_v then
     { Export.default with
@@ -231,7 +243,7 @@ let call_merlin ~filename ~source ~line ~character ~query ~dot_merlin =
   in
   read_source_from_stdin args source
 
-let to_lsif merlin_results : Export.entry list =
+let to_lsif_hover merlin_results : hover_result_vertices list =
   let open Export in
   let open Option in
   let open Import in
@@ -263,19 +275,16 @@ let to_lsif merlin_results : Export.entry list =
           | _ -> failwith "Unexpected merlin result type in 'value' field."
         in
         imported >>= fun { start_line; start_character; end_line; end_character; type_info }  ->
-        let result_set_id = fresh () in
         let result_set_vertex =
           { Export.default with
-            id = Int.to_string result_set_id
-          ; entry_type = "vertex"
+            entry_type = "vertex"
           ; label = "resultSet"
           ; result = None
           }
         in
         let range_vertex =
           { Export.default with
-            id = Int.to_string (fresh ())
-          ; entry_type = "vertex"
+            entry_type = "vertex"
           ; label = "range"
           ; start =
               Some
@@ -289,14 +298,9 @@ let to_lsif merlin_results : Export.entry list =
                 }
           }
         in
-        (* connect range (outV) to resultSet (inV) *)
-        let result_set_edge =
-          connect ~out_v:range_vertex.id ~in_v:result_set_vertex.id ~label:"next" ()
-        in
         let type_info_vertex =
           { Export.default with
-            id = Int.to_string (fresh ())
-          ; entry_type = "vertex"
+            entry_type = "vertex"
           ; label = "hoverResult"
           ; result =
               Some
@@ -309,14 +313,10 @@ let to_lsif merlin_results : Export.entry list =
                    })
           }
         in
-        (* connect resultSet (outV) to hoverResult (inV) *)
-        let hover_edge =
-          connect ~in_v:type_info_vertex.id ~out_v:result_set_vertex.id ~label:"textDocument/hover" ()
-        in
-        return [hover_edge; type_info_vertex; result_set_edge; range_vertex; result_set_vertex]
+        return { result_set_vertex; range_vertex; type_info_vertex }
       in
       match exported with
-      | Some result -> result @ acc
+      | Some result -> result::acc
       | None -> acc)
   |> List.rev
 
@@ -345,7 +345,7 @@ let process_file filename =
       |> List.map ~f:to_token_range
   in
   let source = In_channel.read_all filename in
-  to_lsif @@
+  to_lsif_hover @@
   List.foldi line_ranges ~init:[] ~f:(fun line acc character_ranges ->
       Format.eprintf "%s " filename;
       Format.eprintf "%2.0f%%%!" ((Int.to_float line) /. (Int.to_float (List.length line_ranges)) *. 100.0);
@@ -389,8 +389,7 @@ let document filepath =
     |> Base64.Websafe.encode
   in
   { Export.default with
-    id = Int.to_string (fresh ())
-  ; entry_type = "vertex"
+    entry_type = "vertex"
   ; label = "document"
   ; uri = Some ("file://"^filepath)
   ; language_id = Some "OCaml"
@@ -431,19 +430,7 @@ let print =
 
 let process_filepath project_id filepath =
   if debug then Format.printf "File: %s@." filepath;
-  let document = document filepath in
-  Format.printf "%s@." @@ print document;
-  let document_in_project_edge =
-    connect ~out_v:project_id ~in_vs:[document.id] ~label:"contains" ()
-  in
-  Format.printf "%s@." @@ print document_in_project_edge;
-  let results = process_file filepath in
-  List.iter results ~f:(fun entry ->
-      let entry = Export.entry_to_yojson entry in
-      Format.printf "%s@." @@ Json.to_string entry);
-  let edges = connect_ranges results document.id in
-  let edges = Export.entry_to_yojson edges in
-  Format.printf "%s@." @@ Json.to_string edges
+  process_file filepath
 
 let () =
   Scheduler.Daemon.check_entry_point ();
@@ -458,7 +445,40 @@ let () =
       let project = project () in
       Format.printf "%s@." @@ print header;
       Format.printf "%s@." @@ print project;
-      List.iter paths ~f:(process_filepath project.id)
+      (* do this in parallel *)
+      let results = List.fold paths ~init:[] ~f:(fun acc path ->
+          { filepath = path
+          ; hovers = process_filepath project.id path
+          }::acc)
+      in
+      (* do this sequentially *)
+      List.iter results ~f:(fun { filepath; hovers } ->
+          let document = document filepath in
+          let document = { document with id = Int.to_string (fresh ()) } in
+          Format.printf "%s@." @@ print document;
+          let document_in_project_edge =
+            connect ~out_v:project.id ~in_vs:[document.id] ~label:"contains" ()
+          in
+          Format.printf "%s@." @@ print document_in_project_edge;
+          let hovers =
+            List.concat_map hovers ~f:(fun { result_set_vertex; range_vertex; type_info_vertex } ->
+                let result_set_vertex = { result_set_vertex with id = Int.to_string (fresh ()) } in
+                let range_vertex = { range_vertex with id = Int.to_string (fresh ()) } in
+                (* connect range (outV) to resultSet (inV) *)
+                let result_set_edge =
+                  connect ~out_v:range_vertex.id ~in_v:result_set_vertex.id ~label:"next" ()
+                in
+                let type_info_vertex = { type_info_vertex with id = Int.to_string (fresh ()) } in
+                (* connect resultSet (outV) to hoverResult (inV) *)
+                let hover_edge =
+                  connect ~in_v:type_info_vertex.id ~out_v:result_set_vertex.id ~label:"textDocument/hover" ()
+                in
+                [result_set_vertex; range_vertex; result_set_edge; type_info_vertex; hover_edge]
+              )
+          in
+          List.iter hovers ~f:(fun entry -> Format.printf "%s@." @@ print entry);
+          let edges_entry = connect_ranges hovers document.id in
+          Format.printf "%s@." @@ print edges_entry)
     else
       (* Doesn't work yet: IDs across procs *)
       let header = header () in
@@ -469,9 +489,9 @@ let () =
         Scheduler.map_reduce
           scheduler
           paths
-          ~init:()
-          ~map:(fun init paths -> List.iter paths ~f:(process_filepath project.id))
-          ~reduce:(fun entries acc -> ())
+          ~init:[]
+          ~map:(fun init paths -> List.map paths ~f:(process_filepath project.id))
+          ~reduce:List.append
       in
       begin
         try Scheduler.destroy scheduler

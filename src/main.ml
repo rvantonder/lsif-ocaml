@@ -444,23 +444,30 @@ let () =
     let project = project () in
     Format.printf "%s@." @@ print header;
     Format.printf "%s@." @@ print project;
-    (* do this in parallel *)
-    (*
-    let entries =
+    (* Get type information in parallel *)
+    let results =
       Scheduler.map_reduce
         scheduler
         paths
         ~init:[]
-        ~map:(fun init paths -> List.map paths ~f:(process_filepath project.id))
-        ~reduce:List.append
+        ~map:(fun all_document_results document_paths ->
+            let documents_result =
+              List.map paths ~f:(fun document_path ->
+                  { filepath = document_path
+                  ; hovers = process_filepath project.id document_path
+                  })
+            in
+            documents_result@all_document_results)
+        ~reduce:(@)
     in
-       *)
+    (*
     let results = List.fold paths ~init:[] ~f:(fun acc path ->
         { filepath = path
         ; hovers = process_filepath project.id path
         }::acc)
     in
-    (* do this sequentially *)
+    *)
+    (* Generate IDs and connect vertices sequentially *)
     List.iter results ~f:(fun { filepath; hovers } ->
         let document = document filepath in
         let document = { document with id = Int.to_string (fresh ()) } in

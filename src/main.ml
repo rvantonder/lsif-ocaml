@@ -2,8 +2,9 @@ open Core
 open Base64
 
 module Time = Core_kernel.Time_ns.Span
+module Json = Yojson.Safe
 
-let debug = false
+let debug = Option.is_some (Sys.getenv "DEBUG_OCAML_LSIF")
 
 let i : int ref = ref 1
 
@@ -26,7 +27,8 @@ module Export = struct
   [@@deriving yojson]
 
   type hover =
-    { contents : content list }
+    { contents : content list
+    }
   [@@deriving yojson]
 
   type location =
@@ -47,12 +49,15 @@ module Export = struct
     { id : string
     ; entry_type : string [@key "type"]
     ; label : string
-    ; result : result option [@default None]
-    ; start : location option [@default None]
+    ; result : result option
+          [@default None]
+    ; start : location option
+          [@default None]
     ; end_ : location option
           [@key "end"]
           [@default None]
-    ; version : string option [@default None]
+    ; version : string option
+          [@default None]
     ; project_root : string option
           [@key "projectRoot"]
           [@default None]
@@ -108,6 +113,17 @@ module Export = struct
     }
 end
 
+(** Merling responses. *)
+module Import = struct
+  type t =
+    { start_line : int
+    ; start_character : int
+    ; end_line : int
+    ; end_character : int
+    ; type_info : string
+    }
+end
+
 let connect ?in_v ?out_v ~label =
   { Export.default with
     id = Int.to_string (fresh ())
@@ -152,8 +168,7 @@ let read_source_from_stdin args source =
   if debug then Format.printf "Fin: %s@." @@ Pid.to_string pid;
   result
 
-let call_merlin ~filename ~source ~line ~character =
-  let query = "type-enclosing" in
+let call_merlin ~filename ~source ~line ~character ~query =
   let line = Int.to_string line in
   let character = Int.to_string character in
   let args = ["server"; query; "-position"; line^":"^character; filename] in
@@ -161,66 +176,63 @@ let call_merlin ~filename ~source ~line ~character =
 
 let to_lsif merlin_results : Export.entry list =
   let open Export in
+  let open Option in
+  let open Import in
   List.fold merlin_results ~init:[] ~f:(fun acc result ->
-      let open Yojson.Safe.Util in
-      if debug then Format.printf "Result: %s@." result;
-      let json = Yojson.Safe.from_string result in
-      if debug then Format.printf "json: %s@." @@ Yojson.Safe.pretty_to_string json;
-      let start_line, start_character, end_line, end_character, type_ =
-        json |> member "value" |>
-        function
-        | `List (hd::[])
-        | `List (hd::_) ->
-          let start = hd |> member "start" in
-          let start_line = start |> member "line" in
-          let start_character = start |> member "col" in
-          let end_ = hd |> member "end" in
-          let end_line = end_ |> member "line" in
-          let end_character = end_ |> member "col" in
-          let type_ = hd |> member "type" in
-          start_line, start_character, end_line, end_character, type_
-        | `List [] ->
-          `String "", `String "", `String "", `String "", `String ""
-        | _ ->
-          failwith "other"
-      in
-      let result_set_id = fresh () in
-      let result_set_vertex =
-        { Export.default with
-          id = Int.to_string result_set_id
-        ; entry_type = "vertex"
-        ; label = "resultSet"
-        ; result = None
-        }
-      in
-      let range_vertex =
-        let open Option in
-        let read x =
-          try Yojson.Safe.to_string x |> Int.of_string |> Option.some with _ -> None
+      if debug then Format.printf "Merlin result: %s@." result;
+      let json = Json.from_string result in
+      if debug then Format.printf "JSON: %s@." @@ Json.pretty_to_string json;
+      let exported =
+        let imported =
+          match Json.Util.member "value" json with
+          | `List [hd]
+          | `List (hd::_) ->
+            let start = Json.Util.member "start" hd in
+            let start_line = Json.Util.member "line" start in
+            let start_character = Json.Util.member "col" start in
+            let end_ = Json.Util.member "end" hd in
+            let end_line = Json.Util.member "line" end_ in
+            let end_character = Json.Util.member "col" end_ in
+            let type_info = Json.Util.member "type" hd in
+            let read_int x = try Json.to_string x |> Int.of_string |> Option.some with _ -> None in
+            let read_string x = try Json.to_string x |> Option.some with _ -> None in
+            read_int start_line >>= fun start_line ->
+            read_int start_character >>= fun start_character ->
+            read_int end_line >>= fun end_line ->
+            read_int end_character >>= fun end_character ->
+            read_string type_info >>= fun type_info ->
+            return { start_line; start_character; end_line; end_character; type_info }
+          | `List [] -> None
+          | _ -> failwith "Unexpected merlin result type in 'value' field."
         in
-        read start_line >>= fun start_line ->
-        read start_character >>= fun start_character ->
-        read end_line >>= fun end_line ->
-        read end_character >>= fun end_character ->
-        return
+        imported >>= fun { start_line; start_character; end_line; end_character; type_info }  ->
+        let result_set_id = fresh () in
+        let result_set_vertex =
+          { Export.default with
+            id = Int.to_string result_set_id
+          ; entry_type = "vertex"
+          ; label = "resultSet"
+          ; result = None
+          }
+        in
+        let range_vertex =
           { Export.default with
             id = Int.to_string (fresh ())
           ; entry_type = "vertex"
           ; label = "range"
-          ; start = Some
+          ; start =
+              Some
                 { line = start_line - 1
                 ; character = start_character
                 }
-          ; end_ = Some
+          ; end_ =
+              Some
                 { line = end_line -1
                 ; character = end_character
                 }
           }
-      in
-      let json = Yojson.Safe.from_string result in
-      let type_info = Yojson.Safe.to_string type_ in
-      match range_vertex with
-      | Some range_vertex ->
+        in
+        let json = Json.from_string result in
         (* connect range (outV) to resultSet (inV) *)
         let result_set_edge =
           { Export.default with
@@ -237,13 +249,14 @@ let to_lsif merlin_results : Export.entry list =
           ; entry_type = "vertex"
           ; label = "hoverResult"
           ; result =
-              Some (Hover
-                      { contents = [
-                            { language = "OCaml"
-                            ; value = type_info
-                            }
-                          ]
-                      })
+              Some
+                (Hover
+                   { contents = [
+                         { language = "OCaml"
+                         ; value = type_info
+                         }
+                       ]
+                   })
           }
         in
         (* connect resultSet (outV) to hoverResult (inV) *)
@@ -256,41 +269,39 @@ let to_lsif merlin_results : Export.entry list =
           ; in_v = Some type_info_vertex.id
           }
         in
-        hover_edge::type_info_vertex::result_set_edge::range_vertex::result_set_vertex::acc
-      | None ->
-        acc)
+        return [hover_edge; type_info_vertex; result_set_edge; range_vertex; result_set_vertex]
+      in
+      match exported with
+      | Some result -> result @ acc
+      | None -> acc)
   |> List.rev
 
-
 let process_file filename =
+  let query = "type-enclosing" in
   let line_lengths =
     In_channel.read_lines filename
     |> List.map ~f:String.length
   in
   let lines = List.length line_lengths in
-  let source =
-    In_channel.with_file filename ~f:(fun in_channel ->
-        In_channel.input_all in_channel)
-  in
+  let source = In_channel.read_all filename in
   let results =
     List.foldi line_lengths ~init:[] ~f:(fun line acc length ->
-        Format.eprintf "%2.0f%%%!" @@ ((Int.to_float line) /. (Int.to_float lines) *. 100.0);
+        Format.eprintf "%2.0f%%%!" ((Int.to_float line) /. (Int.to_float lines) *. 100.0);
         Format.eprintf "\x1b[999D";
         Format.eprintf "\x1b[2K";
         List.fold (List.range 0 length) ~init:acc ~f:(fun acc character ->
-            (call_merlin ~filename ~source ~line:(line+1) ~character)::acc))
-    (* remove timing and notifications fields *)
+            (call_merlin ~filename ~source ~line:(line+1) ~character ~query)::acc))
+    (* Remove merlin timing and notifications fields so we can dedup. *)
     |> List.map ~f:(fun s ->
-        let open Yojson.Safe.Util in
-        let json = Yojson.Safe.from_string s in
-        let class_ = json |> member "class" in
-        let value = json |> member "value" in
-        Yojson.Safe.to_string @@ `Assoc ["class", class_; "value", value])
+        let json = Json.from_string s in
+        let class_ = Json.Util.member "class" json in
+        let value = Json.Util.member "value" json in
+        Json.to_string @@ `Assoc ["class", class_; "value", value])
     |> List.dedup ~compare:String.compare
   in
   to_lsif results
 
-let print_header () =
+let header () =
   { Export.default with
     id = Int.to_string (fresh ())
   ; entry_type = "vertex"
@@ -300,8 +311,6 @@ let print_header () =
   ; tool_info = Some { name = "lsif-ocaml"; version = "0.1.0" }
   ; position_encoding = Some "utf-16"
   }
-  |> Export.entry_to_yojson
-  |> Yojson.Safe.to_string
 
 let project () =
   { Export.default with
@@ -345,13 +354,14 @@ let () =
   | _ :: filepath :: _ ->
     let print =
       Fn.compose
-        Yojson.Safe.to_string
+        Json.to_string
         Export.entry_to_yojson
     in
     if debug then Format.printf "File: %s@." filepath;
-    Format.printf "%s@." @@ print_header ();
+    let header = header () in
     let project = project () in
     let document = document filepath in
+    Format.printf "%s@." @@ print header;
     Format.printf "%s@." @@ print project;
     Format.printf "%s@." @@ print document;
     let document_project_edge =
@@ -361,7 +371,7 @@ let () =
     let results = process_file filepath in
     List.iter results ~f:(fun entry ->
         let entry = Export.entry_to_yojson entry in
-        Format.printf "%s@." @@ Yojson.Safe.to_string entry);
+        Format.printf "%s@." @@ Json.to_string entry);
     let edges = connect_ranges results document.id in
     let edges = Export.entry_to_yojson edges in
-    Format.printf "%s@." @@ Yojson.Safe.to_string edges
+    Format.printf "%s@." @@ Json.to_string edges

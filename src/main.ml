@@ -1,15 +1,18 @@
 open Core
 open Base64
+open Hack_parallel
 
 module Time = Core_kernel.Time_ns.Span
 module Json = Yojson.Safe
 
 let debug = Option.is_some (Sys.getenv "DEBUG_OCAML_LSIF")
 let tokenize = true
+let parallel = false
 
 let i : int ref = ref 1
 
 let fresh () =
+  (* Uuid_unix.(Fn.compose Uuid.to_string create ()) *)
   let id = !i in
   i := !i + 1;
   id
@@ -421,30 +424,58 @@ let paths root =
   in
   fold_directory root ~init:[] ~f
 
+let print =
+  Fn.compose
+    Json.to_string
+    Export.entry_to_yojson
+
+let process_filepath project_id filepath =
+  if debug then Format.printf "File: %s@." filepath;
+  let document = document filepath in
+  Format.printf "%s@." @@ print document;
+  let document_in_project_edge =
+    connect ~out_v:project_id ~in_vs:[document.id] ~label:"contains" ()
+  in
+  Format.printf "%s@." @@ print document_in_project_edge;
+  let results = process_file filepath in
+  List.iter results ~f:(fun entry ->
+      let entry = Export.entry_to_yojson entry in
+      Format.printf "%s@." @@ Json.to_string entry);
+  let edges = connect_ranges results document.id in
+  let edges = Export.entry_to_yojson edges in
+  Format.printf "%s@." @@ Json.to_string edges
+
 let () =
+  Scheduler.Daemon.check_entry_point ();
   match Sys.argv |> Array.to_list with
   | [] | [_] -> failwith "Supply a filename"
   | _ :: root :: _ ->
-    let print =
-      Fn.compose
-        Json.to_string
-        Export.entry_to_yojson
-    in
+    let number_of_workers = if parallel then 4 else 1 in
+    let scheduler = Scheduler.create ~number_of_workers () in
     let paths = paths root in
-    let header = header () in
-    let project = project () in
-    List.iter paths ~f:(fun filepath ->
-        if debug then Format.printf "File: %s@." filepath;
-        let document = document filepath in
-        Format.printf "%s@." @@ print document;
-        let document_in_project_edge =
-          connect ~out_v:project.id ~in_vs:[document.id] ~label:"contains" ()
-        in
-        Format.printf "%s@." @@ print document_in_project_edge;
-        let results = process_file filepath in
-        List.iter results ~f:(fun entry ->
-            let entry = Export.entry_to_yojson entry in
-            Format.printf "%s@." @@ Json.to_string entry);
-        let edges = connect_ranges results document.id in
-        let edges = Export.entry_to_yojson edges in
-        Format.printf "%s@." @@ Json.to_string edges)
+    if not parallel then
+      let header = header () in
+      let project = project () in
+      Format.printf "%s@." @@ print header;
+      Format.printf "%s@." @@ print project;
+      List.iter paths ~f:(process_filepath project.id)
+    else
+      (* Doesn't work yet: IDs across procs *)
+      let header = header () in
+      let project = project () in
+      Format.printf "%s@." @@ print header;
+      Format.printf "%s@." @@ print project;
+      let entries =
+        Scheduler.map_reduce
+          scheduler
+          paths
+          ~init:()
+          ~map:(fun init paths -> List.iter paths ~f:(process_filepath project.id))
+          ~reduce:(fun entries acc -> ())
+      in
+      begin
+        try Scheduler.destroy scheduler
+        with Unix.Unix_error (_,"kill",_) ->
+          (* No kill command on Mac OS X *)
+          ()
+      end

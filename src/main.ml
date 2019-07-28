@@ -113,7 +113,7 @@ module Export = struct
     }
 end
 
-(** Merling responses. *)
+(** Merlin responses. *)
 module Import = struct
   type t =
     { start_line : int
@@ -165,13 +165,32 @@ let read_source_from_stdin args source =
   In_channel.close stderr;
   Out_channel.close stdin;
   let finished = Unix.waitpid pid in
-  if debug then Format.printf "Fin: %s@." @@ Pid.to_string pid;
   result
 
-let call_merlin ~filename ~source ~line ~character ~query =
+let lookup_dot_merlin filename =
+  let dot_merlin_path = Filename.dirname filename ^/ ".merlin" in
+  if Sys.is_file dot_merlin_path = `Yes then
+    begin
+      if debug then Format.printf "Merlin: %s@." dot_merlin_path;
+      Some dot_merlin_path
+    end
+  else
+    begin
+      if debug then Format.printf "NO MERLIN: %s@." dot_merlin_path;
+      None
+    end
+
+let call_merlin ~filename ~source ~line ~character ~query ~dot_merlin =
   let line = Int.to_string line in
   let character = Int.to_string character in
-  let args = ["server"; query; "-position"; line^":"^character; filename] in
+  let args =
+    [ "server"
+    ; query
+    ; "-position"; line^":"^character
+    ; "-index"; "0"
+    ; filename
+    ] @ dot_merlin
+  in
   read_source_from_stdin args source
 
 let to_lsif merlin_results : Export.entry list =
@@ -277,7 +296,13 @@ let to_lsif merlin_results : Export.entry list =
   |> List.rev
 
 let process_file filename =
+  if debug then Format.printf "File: %s@." filename;
   let query = "type-enclosing" in
+  let dot_merlin =
+    match lookup_dot_merlin filename with
+    | Some dot_merlin -> ["-dot-merlin"; dot_merlin]
+    | None -> []
+  in
   let line_lengths =
     In_channel.read_lines filename
     |> List.map ~f:String.length
@@ -290,7 +315,7 @@ let process_file filename =
         Format.eprintf "\x1b[999D";
         Format.eprintf "\x1b[2K";
         List.fold (List.range 0 length) ~init:acc ~f:(fun acc character ->
-            (call_merlin ~filename ~source ~line:(line+1) ~character ~query)::acc))
+            (call_merlin ~filename ~source ~line:(line+1) ~character ~query ~dot_merlin)::acc))
     (* Remove merlin timing and notifications fields so we can dedup. *)
     |> List.map ~f:(fun s ->
         let json = Json.from_string s in

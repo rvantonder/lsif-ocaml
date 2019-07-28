@@ -7,7 +7,7 @@ module Json = Yojson.Safe
 
 let debug = Option.is_some (Sys.getenv "DEBUG_OCAML_LSIF")
 let tokenize = true
-let parallel = false
+let parallel = true
 
 let i : int ref = ref 1
 
@@ -435,9 +435,8 @@ let process_filepath project_id filepath =
 let () =
   Scheduler.Daemon.check_entry_point ();
   match Sys.argv |> Array.to_list with
-  | [] | [_] -> failwith "Supply a filename"
-  | _ :: root :: _ ->
-    let number_of_workers = if parallel then 4 else 1 in
+  | _ :: root :: n :: _ ->
+    let number_of_workers = if parallel then Int.of_string n else 1 in
     let scheduler = Scheduler.create ~number_of_workers () in
     let paths = paths root in
     let header = header () in
@@ -501,3 +500,4 @@ let () =
         (* No kill command on Mac OS X *)
         ()
     end
+  | _ -> failwith "Supply a filename and nprocs"

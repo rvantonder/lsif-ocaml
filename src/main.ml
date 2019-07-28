@@ -13,6 +13,29 @@ let fresh () =
   i := !i + 1;
   id
 
+(* skip or continue directory descent *)
+type 'a next =
+  | Skip of 'a
+  | Continue of 'a
+
+let fold_directory ?(sorted=false) root ~init ~f =
+  let rec aux acc absolute_path depth =
+    if Sys.is_file absolute_path = `Yes then
+      match f acc ~depth ~absolute_path ~is_file:true with
+      | Continue acc
+      | Skip acc -> acc
+    else if Sys.is_directory absolute_path = `Yes then
+      match f acc ~depth ~absolute_path ~is_file:false with
+      | Skip acc -> acc
+      | Continue acc ->
+        Sys.ls_dir absolute_path
+        |> List.fold ~init:acc ~f:(fun acc subdir ->
+            aux acc (Filename.concat absolute_path subdir) (depth + 1))
+    else
+      acc
+  in
+  aux init root (-1)
+
 module Export = struct
   type tool_info =
     { name : string
@@ -369,12 +392,29 @@ let connect_ranges results document_id =
 let () =
   match Sys.argv |> Array.to_list with
   | [] | [_] -> failwith "Supply a filename"
-  | _ :: filepath :: _ ->
+  | _ :: root :: _ ->
     let print =
       Fn.compose
         Json.to_string
         Export.entry_to_yojson
     in
+    if debug then Format.printf "Root: %s@." root;
+    let f acc ~depth ~absolute_path ~is_file =
+      let is_ml_or_re_file =
+        String.is_suffix ~suffix:".ml" absolute_path
+        || String.is_suffix ~suffix:".mli" absolute_path
+        || String.is_suffix ~suffix:".re" absolute_path
+        || String.is_suffix ~suffix:".rei" absolute_path
+      in
+      if is_file && is_ml_or_re_file then
+        Continue (absolute_path::acc)
+      else
+        Continue acc
+    in
+    let paths = fold_directory root ~init:[] ~f in
+    List.iter paths ~f:(Format.printf "%s@.");
+(*
+    let filepath = "..." in
     if debug then Format.printf "File: %s@." filepath;
     let header = header () in
     let project = project () in
@@ -392,4 +432,5 @@ let () =
         Format.printf "%s@." @@ Json.to_string entry);
     let edges = connect_ranges results document.id in
     let edges = Export.entry_to_yojson edges in
-    Format.printf "%s@." @@ Json.to_string edges
+    Format.printf "%s@." @@ Json.to_string edges;
+*)

@@ -5,6 +5,7 @@ module Time = Core_kernel.Time_ns.Span
 module Json = Yojson.Safe
 
 let debug = Option.is_some (Sys.getenv "DEBUG_OCAML_LSIF")
+let tokenize = true
 
 let i : int ref = ref 1
 
@@ -285,7 +286,6 @@ let to_lsif merlin_results : Export.entry list =
                 }
           }
         in
-        let json = Json.from_string result in
         (* connect range (outV) to resultSet (inV) *)
         let result_set_edge =
           connect ~out_v:range_vertex.id ~in_v:result_set_vertex.id ~label:"next" ()
@@ -325,26 +325,39 @@ let process_file filename =
     | Some dot_merlin -> ["-dot-merlin"; dot_merlin]
     | None -> []
   in
-  let line_lengths =
-    In_channel.read_lines filename
-    |> List.map ~f:String.length
+  let line_ranges =
+    if not tokenize then
+      In_channel.read_lines filename
+      |> List.map ~f:String.length
+      |> List.map ~f:(List.range 0)
+    else
+      (* Roughly, split each line into tokens, and put the cursor right after whitespace *)
+      let to_token_range line =
+        String.substr_index_all line ~may_overlap:false ~pattern:" "
+        |> List.map ~f:((+) 1)
+        (* Always process start of line *)
+        |> fun l -> 0::l
+      in
+      In_channel.read_lines filename
+      |> List.map ~f:to_token_range
   in
-  let lines = List.length line_lengths in
   let source = In_channel.read_all filename in
   to_lsif @@
-  List.foldi line_lengths ~init:[] ~f:(fun line acc length ->
-      Format.eprintf "%2.0f%%%!" ((Int.to_float line) /. (Int.to_float lines) *. 100.0);
+  List.foldi line_ranges ~init:[] ~f:(fun line acc character_ranges ->
+      Format.eprintf "%2.0f%%%!" ((Int.to_float line) /. (Int.to_float (List.length line_ranges)) *. 100.0);
       Format.eprintf "\x1b[999D";
       Format.eprintf "\x1b[2K";
-      List.fold (List.range 0 length) ~init:acc ~f:(fun acc character ->
+      List.fold character_ranges ~init:acc ~f:(fun acc character ->
           let merlin_result = call_merlin ~filename ~source ~line:(line+1) ~character ~query ~dot_merlin in
           merlin_result::acc)
       (* Remove merlin timing and notifications fields so we can dedup. Dedup after each line. *)
-      |> List.map ~f:(fun s ->
-          let json = Json.from_string s in
-          let class_ = Json.Util.member "class" json in
-          let value = Json.Util.member "value" json in
-          Json.to_string @@ `Assoc ["class", class_; "value", value])
+      |> List.filter_map ~f:(fun s ->
+          try
+            let json = Json.from_string s in
+            let class_ = Json.Util.member "class" json in
+            let value = Json.Util.member "value" json in
+            Some (Json.to_string @@ `Assoc ["class", class_; "value", value])
+          with _ -> None)
       |> List.dedup ~compare:String.compare)
 
 let header () =

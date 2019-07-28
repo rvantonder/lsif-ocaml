@@ -331,22 +331,21 @@ let process_file filename =
   in
   let lines = List.length line_lengths in
   let source = In_channel.read_all filename in
-  let results =
-    List.foldi line_lengths ~init:[] ~f:(fun line acc length ->
-        Format.eprintf "%2.0f%%%!" ((Int.to_float line) /. (Int.to_float lines) *. 100.0);
-        Format.eprintf "\x1b[999D";
-        Format.eprintf "\x1b[2K";
-        List.fold (List.range 0 length) ~init:acc ~f:(fun acc character ->
-            (call_merlin ~filename ~source ~line:(line+1) ~character ~query ~dot_merlin)::acc))
-    (* Remove merlin timing and notifications fields so we can dedup. *)
-    |> List.map ~f:(fun s ->
-        let json = Json.from_string s in
-        let class_ = Json.Util.member "class" json in
-        let value = Json.Util.member "value" json in
-        Json.to_string @@ `Assoc ["class", class_; "value", value])
-    |> List.dedup ~compare:String.compare
-  in
-  to_lsif results
+  to_lsif @@
+  List.foldi line_lengths ~init:[] ~f:(fun line acc length ->
+      Format.eprintf "%2.0f%%%!" ((Int.to_float line) /. (Int.to_float lines) *. 100.0);
+      Format.eprintf "\x1b[999D";
+      Format.eprintf "\x1b[2K";
+      List.fold (List.range 0 length) ~init:acc ~f:(fun acc character ->
+          let merlin_result = call_merlin ~filename ~source ~line:(line+1) ~character ~query ~dot_merlin in
+          merlin_result::acc)
+      (* Remove merlin timing and notifications fields so we can dedup. Dedup after each line. *)
+      |> List.map ~f:(fun s ->
+          let json = Json.from_string s in
+          let class_ = Json.Util.member "class" json in
+          let value = Json.Util.member "value" json in
+          Json.to_string @@ `Assoc ["class", class_; "value", value])
+      |> List.dedup ~compare:String.compare)
 
 let header () =
   { Export.default with
@@ -389,33 +388,35 @@ let connect_ranges results document_id =
   in
   connect ~out_v:document_id ~in_vs ~label:"contains" ()
 
+let paths root =
+  let f acc ~depth ~absolute_path ~is_file =
+    let is_ml_or_re_file =
+      if is_file then
+        [".ml"; ".mli"; ".re"; ".rei"]
+        |> List.exists ~f:(fun suffix -> String.is_suffix ~suffix absolute_path)
+      else
+        false
+    in
+    if is_ml_or_re_file then
+      Continue (absolute_path::acc)
+    else
+      Continue acc
+  in
+  fold_directory root ~init:[] ~f
+
 let () =
   match Sys.argv |> Array.to_list with
   | [] | [_] -> failwith "Supply a filename"
-  | _ :: root :: _ ->
+  | _ :: filepath :: _ ->
     let print =
       Fn.compose
         Json.to_string
         Export.entry_to_yojson
     in
-    if debug then Format.printf "Root: %s@." root;
-    let f acc ~depth ~absolute_path ~is_file =
-      if is_file then
-        let is_ml_or_re_file =
-          [".ml"; ".mli"; ".re"; ".rei"]
-          |> List.exists ~f:(fun suffix -> String.is_suffix ~suffix absolute_path)
-        in
-        if is_ml_or_re_file then
-          Continue (absolute_path::acc)
-        else
-          Continue acc
-      else
-        Continue acc
-    in
-    let paths = fold_directory root ~init:[] ~f in
-    List.iter paths ~f:(Format.printf "%s@.");
-(*
-    let filepath = "..." in
+    (*if debug then Format.printf "Root: %s@." root;
+      let paths = paths root in
+      List.iter paths ~f:(Format.printf "%s@.");*)
+    (*let filepath = "..." in*)
     if debug then Format.printf "File: %s@." filepath;
     let header = header () in
     let project = project () in
@@ -434,4 +435,3 @@ let () =
     let edges = connect_ranges results document.id in
     let edges = Export.entry_to_yojson edges in
     Format.printf "%s@." @@ Json.to_string edges;
-*)

@@ -429,6 +429,7 @@ let print =
     Export.entry_to_yojson
 
 let process_filepath project_id filepath =
+  (* Format.eprintf "%s @." filepath; *)
   if debug then Format.printf "File: %s@." filepath;
   process_file filepath
 
@@ -451,7 +452,7 @@ let () =
         ~init:[]
         ~map:(fun all_document_results document_paths ->
             let documents_result =
-              List.map paths ~f:(fun document_path ->
+              List.map document_paths ~f:(fun document_path ->
                   { filepath = document_path
                   ; hovers = process_filepath project.id document_path
                   })

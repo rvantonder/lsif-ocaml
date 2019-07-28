@@ -400,14 +400,15 @@ let () =
     in
     if debug then Format.printf "Root: %s@." root;
     let f acc ~depth ~absolute_path ~is_file =
-      let is_ml_or_re_file =
-        String.is_suffix ~suffix:".ml" absolute_path
-        || String.is_suffix ~suffix:".mli" absolute_path
-        || String.is_suffix ~suffix:".re" absolute_path
-        || String.is_suffix ~suffix:".rei" absolute_path
-      in
-      if is_file && is_ml_or_re_file then
-        Continue (absolute_path::acc)
+      if is_file then
+        let is_ml_or_re_file =
+          [".ml"; ".mli"; ".re"; ".rei"]
+          |> List.exists ~f:(fun suffix -> String.is_suffix ~suffix absolute_path)
+        in
+        if is_ml_or_re_file then
+          Continue (absolute_path::acc)
+        else
+          Continue acc
       else
         Continue acc
     in

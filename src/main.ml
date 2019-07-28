@@ -124,14 +124,25 @@ module Import = struct
     }
 end
 
-let connect ?in_v ?out_v ~label =
-  { Export.default with
-    id = Int.to_string (fresh ())
-  ; entry_type = "edge"
-  ; label
-  ; out_v
-  ; in_vs = Some [Option.value_exn in_v]
-  }
+let connect ?out_v ?in_v ?in_vs ~label () =
+  if Option.is_some in_v then
+    { Export.default with
+      id = Int.to_string (fresh ())
+    ; entry_type = "edge"
+    ; label
+    ; out_v
+    ; in_v
+    }
+  else if Option.is_some in_vs then
+    { Export.default with
+      id = Int.to_string (fresh ())
+    ; entry_type = "edge"
+    ; label
+    ; out_v
+    ; in_vs
+    }
+  else
+    failwith "Do not call with both in_v and in_vs"
 
 let read_with_timeout read_from_channels =
   let read_from_fds = List.map ~f:Unix.descr_of_in_channel read_from_channels in
@@ -254,13 +265,7 @@ let to_lsif merlin_results : Export.entry list =
         let json = Json.from_string result in
         (* connect range (outV) to resultSet (inV) *)
         let result_set_edge =
-          { Export.default with
-            id = Int.to_string (fresh ())
-          ; entry_type = "edge"
-          ; label = "next"
-          ; out_v = Some range_vertex.id
-          ; in_v = Some result_set_vertex.id
-          }
+          connect ~out_v:range_vertex.id ~in_v:result_set_vertex.id ~label:"next" ()
         in
         let type_info_vertex =
           { Export.default with
@@ -280,13 +285,7 @@ let to_lsif merlin_results : Export.entry list =
         in
         (* connect resultSet (outV) to hoverResult (inV) *)
         let hover_edge =
-          { Export.default with
-            id = Int.to_string (fresh ())
-          ; entry_type = "edge"
-          ; label = "textDocument/hover"
-          ; out_v = Some result_set_vertex.id
-          ; in_v = Some type_info_vertex.id
-          }
+          connect ~in_v:type_info_vertex.id ~out_v:result_set_vertex.id ~label:"textDocument/hover" ()
         in
         return [hover_edge; type_info_vertex; result_set_edge; range_vertex; result_set_vertex]
       in
@@ -365,13 +364,7 @@ let connect_ranges results document_id =
       | { id; label = "range"; _ } -> Some id
       | _ -> None)
   in
-  { Export.default with
-    id = Int.to_string (fresh ())
-  ; entry_type = "edge"
-  ; label = "contains"
-  ; out_v = Some document_id
-  ; in_vs = Some in_vs
-  }
+  connect ~out_v:document_id ~in_vs ~label:"contains" ()
 
 let () =
   match Sys.argv |> Array.to_list with
@@ -390,7 +383,7 @@ let () =
     Format.printf "%s@." @@ print project;
     Format.printf "%s@." @@ print document;
     let document_project_edge =
-      connect ~out_v:project.id ~in_v:document.id ~label:"contains"
+      connect ~out_v:project.id ~in_v:document.id ~label:"contains" ()
     in
     Format.printf "%s@." @@ print document_project_edge;
     let results = process_file filepath in

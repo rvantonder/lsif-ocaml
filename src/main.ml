@@ -344,6 +344,7 @@ let process_file filename =
   let source = In_channel.read_all filename in
   to_lsif @@
   List.foldi line_ranges ~init:[] ~f:(fun line acc character_ranges ->
+      Format.eprintf "%s " filename;
       Format.eprintf "%2.0f%%%!" ((Int.to_float line) /. (Int.to_float (List.length line_ranges)) *. 100.0);
       Format.eprintf "\x1b[999D";
       Format.eprintf "\x1b[2K";
@@ -412,6 +413,9 @@ let paths root =
     in
     if is_ml_or_re_file then
       Continue (absolute_path::acc)
+    else if Filename.basename absolute_path = "_build" then
+      (* Don't descend into the _build directory. *)
+      Skip acc
     else
       Continue acc
   in
@@ -420,31 +424,27 @@ let paths root =
 let () =
   match Sys.argv |> Array.to_list with
   | [] | [_] -> failwith "Supply a filename"
-  | _ :: filepath :: _ ->
+  | _ :: root :: _ ->
     let print =
       Fn.compose
         Json.to_string
         Export.entry_to_yojson
     in
-    (*if debug then Format.printf "Root: %s@." root;
-      let paths = paths root in
-      List.iter paths ~f:(Format.printf "%s@.");*)
-    (*let filepath = "..." in*)
-    if debug then Format.printf "File: %s@." filepath;
+    let paths = paths root in
     let header = header () in
     let project = project () in
-    let document = document filepath in
-    Format.printf "%s@." @@ print header;
-    Format.printf "%s@." @@ print project;
-    Format.printf "%s@." @@ print document;
-    let document_project_edge =
-      connect ~out_v:project.id ~in_vs:[document.id] ~label:"contains" ()
-    in
-    Format.printf "%s@." @@ print document_project_edge;
-    let results = process_file filepath in
-    List.iter results ~f:(fun entry ->
-        let entry = Export.entry_to_yojson entry in
-        Format.printf "%s@." @@ Json.to_string entry);
-    let edges = connect_ranges results document.id in
-    let edges = Export.entry_to_yojson edges in
-    Format.printf "%s@." @@ Json.to_string edges;
+    List.iter paths ~f:(fun filepath ->
+        if debug then Format.printf "File: %s@." filepath;
+        let document = document filepath in
+        Format.printf "%s@." @@ print document;
+        let document_in_project_edge =
+          connect ~out_v:project.id ~in_vs:[document.id] ~label:"contains" ()
+        in
+        Format.printf "%s@." @@ print document_in_project_edge;
+        let results = process_file filepath in
+        List.iter results ~f:(fun entry ->
+            let entry = Export.entry_to_yojson entry in
+            Format.printf "%s@." @@ Json.to_string entry);
+        let edges = connect_ranges results document.id in
+        let edges = Export.entry_to_yojson edges in
+        Format.printf "%s@." @@ Json.to_string edges)

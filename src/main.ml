@@ -12,7 +12,6 @@ let parallel = true
 let i : int ref = ref 1
 
 let fresh () =
-  (* Uuid_unix.(Fn.compose Uuid.to_string create ()) *)
   let id = !i in
   i := !i + 1;
   id
@@ -429,7 +428,6 @@ let print =
     Export.entry_to_yojson
 
 let process_filepath project_id filepath =
-  (* Format.eprintf "%s @." filepath; *)
   if debug then Format.printf "File: %s@." filepath;
   process_file filepath
 
@@ -444,7 +442,7 @@ let () =
     let project = project () in
     Format.printf "%s@." @@ print header;
     Format.printf "%s@." @@ print project;
-    (* Get type information in parallel *)
+    (* Get type information in parallel. *)
     let results =
       Scheduler.map_reduce
         scheduler
@@ -460,14 +458,7 @@ let () =
             documents_result@all_document_results)
         ~reduce:(@)
     in
-    (*
-    let results = List.fold paths ~init:[] ~f:(fun acc path ->
-        { filepath = path
-        ; hovers = process_filepath project.id path
-        }::acc)
-    in
-    *)
-    (* Generate IDs and connect vertices sequentially *)
+    (* Generate IDs and connect vertices sequentially. *)
     List.iter results ~f:(fun { filepath; hovers } ->
         let document = document filepath in
         let document = { document with id = Int.to_string (fresh ()) } in
@@ -480,12 +471,12 @@ let () =
           List.concat_map hovers ~f:(fun { result_set_vertex; range_vertex; type_info_vertex } ->
               let result_set_vertex = { result_set_vertex with id = Int.to_string (fresh ()) } in
               let range_vertex = { range_vertex with id = Int.to_string (fresh ()) } in
-              (* connect range (outV) to resultSet (inV) *)
+              (* Connect range (outV) to resultSet (inV). *)
               let result_set_edge =
                 connect ~out_v:range_vertex.id ~in_v:result_set_vertex.id ~label:"next" ()
               in
               let type_info_vertex = { type_info_vertex with id = Int.to_string (fresh ()) } in
-              (* connect resultSet (outV) to hoverResult (inV) *)
+              (* Connect resultSet (outV) to hoverResult (inV). *)
               let hover_edge =
                 connect ~in_v:type_info_vertex.id ~out_v:result_set_vertex.id ~label:"textDocument/hover" ()
               in
@@ -497,8 +488,6 @@ let () =
         Format.printf "%s@." @@ print edges_entry);
     begin
       try Scheduler.destroy scheduler
-      with Unix.Unix_error (_,"kill",_) ->
-        (* No kill command on Mac OS X *)
-        ()
+      with Unix.Unix_error (_,"kill",_) -> ()
     end
   | _ -> failwith "Supply a filename and nprocs"

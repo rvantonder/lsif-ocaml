@@ -333,12 +333,20 @@ let process_file filename =
       |> List.map ~f:String.length
       |> List.map ~f:(List.range 0)
     else
-      (* Roughly, split each line into tokens, and put the cursor right after whitespace *)
+      (* Roughly, split each line into tokens, and put the cursor right after whitespace and tokens. *)
       let to_token_range line =
+        let chars =
+          ["!"; "\""; "#"; "$"; "%"; "&"; "'"; "*"; "+"
+          ; ","; "-"; "."; "/"; ":"; ";"; "<"; "="; ">"
+          ; "?"; "@"; ","; "("; ")"; "{"; "}"; "["; "]"
+          ; "~"; "`"] in
+        let type_at_locations =
+          List.concat_map chars ~f:(fun pattern -> String.substr_index_all line ~may_overlap:false ~pattern)
+        in
         String.substr_index_all line ~may_overlap:false ~pattern:" "
         |> List.map ~f:((+) 1)
         (* Always process start of line *)
-        |> fun l -> 0::l
+        |> fun l -> 0::l@type_at_locations
       in
       In_channel.read_lines filename
       |> List.map ~f:to_token_range
@@ -363,13 +371,13 @@ let process_file filename =
           with _ -> None)
       |> List.dedup ~compare:String.compare)
 
-let header () =
+let header root =
   { Export.default with
     id = Int.to_string (fresh ())
   ; entry_type = "vertex"
   ; label = "metaData"
   ; version = Some "0.4.0"
-  ; project_root = Some ("file://"^Sys.getcwd ())
+  ; project_root = Some ("file://"^root)
   ; tool_info = Some { name = "lsif-ocaml"; version = "0.1.0" }
   ; position_encoding = Some "utf-16"
   }
@@ -382,15 +390,19 @@ let project () =
   ; kind = Some "OCaml"
   }
 
-let document filepath =
+let document local_root project_root filepath =
   let contents_base64 =
     In_channel.read_all filepath
     |> Base64.Websafe.encode
   in
+  let filepath_relative_project_root =
+    let relative_filepath = String.chop_prefix_exn filepath ~prefix:local_root in
+    project_root ^/ relative_filepath
+  in
   { Export.default with
     entry_type = "vertex"
   ; label = "document"
-  ; uri = Some ("file://"^filepath)
+  ; uri = Some ("file://"^filepath_relative_project_root)
   ; language_id = Some "OCaml"
   ; contents = Some contents_base64
   }
@@ -434,11 +446,11 @@ let process_filepath project_id filepath =
 let () =
   Scheduler.Daemon.check_entry_point ();
   match Sys.argv |> Array.to_list with
-  | _ :: root :: n :: _ ->
+  | _ :: local_root :: project_root :: n :: _ ->
     let number_of_workers = if parallel then Int.of_string n else 1 in
     let scheduler = Scheduler.create ~number_of_workers () in
-    let paths = paths root in
-    let header = header () in
+    let paths = paths local_root in
+    let header = header project_root in
     let project = project () in
     Format.printf "%s@." @@ print header;
     Format.printf "%s@." @@ print project;
@@ -460,7 +472,7 @@ let () =
     in
     (* Generate IDs and connect vertices sequentially. *)
     List.iter results ~f:(fun { filepath; hovers } ->
-        let document = document filepath in
+        let document = document local_root project_root filepath in
         let document = { document with id = Int.to_string (fresh ()) } in
         Format.printf "%s@." @@ print document;
         let document_in_project_edge =
@@ -490,4 +502,4 @@ let () =
       try Scheduler.destroy scheduler
       with Unix.Unix_error (_,"kill",_) -> ()
     end
-  | _ -> failwith "Supply a filename and nprocs"
+  | _ -> failwith {|Supply a "local root (absolute path)" "project root (/github.com/my/proj)" "nprocs"|}

@@ -200,8 +200,12 @@ let read_with_timeout read_from_channels =
 
 let read_source_from_stdin args source =
   let open Unix.Process_channels in
+  let worker = Int.to_string (Random.int 4) in
   let Unix.Process_info.{ stdin; stdout; stderr; pid } =
-    Unix.create_process ~prog:"ocamlmerlin" ~args
+    Unix.create_process_env
+      ~prog:(Format.sprintf "/tmp/ocamlmerlin-worker-%d/ocamlmerlin" ((Int.of_string (worker)+1)))
+      ~args
+      ~env:(`Extend [("TMPDIR", "/tmp/ocamlmerlin-worker-"^worker)]) ()
   in
   let stdin = Unix.out_channel_of_descr stdin in
   let stdout = Unix.in_channel_of_descr stdout in
@@ -320,6 +324,7 @@ let to_lsif_hover merlin_results : hover_result_vertices list =
   |> List.rev
 
 let process_file filename =
+  Format.eprintf "File: %s@." filename;
   if debug then Format.printf "File: %s@." filename;
   let query = "type-enclosing" in
   let dot_merlin =

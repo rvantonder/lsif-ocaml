@@ -203,7 +203,7 @@ let read_source_from_stdin args source =
   let worker = Int.to_string (Random.int 4) in
   let Unix.Process_info.{ stdin; stdout; stderr; pid } =
     Unix.create_process_env
-      ~prog:(Format.sprintf "/tmp/ocamlmerlin-worker-%d/ocamlmerlin" ((Int.of_string (worker)+1)))
+      ~prog:(Format.sprintf "/tmp/ocamlmerlin-worker-%s/ocamlmerlin" worker)
       ~args
       ~env:(`Extend [("TMPDIR", "/tmp/ocamlmerlin-worker-"^worker)]) ()
   in

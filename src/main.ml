@@ -343,10 +343,14 @@ let process_file filename =
         let type_at_locations =
           List.concat_map chars ~f:(fun pattern -> String.substr_index_all line ~may_overlap:false ~pattern)
         in
+        let type_after_locations =
+          type_at_locations
+          |> List.map ~f:((+) 1)
+        in
         String.substr_index_all line ~may_overlap:false ~pattern:" "
         |> List.map ~f:((+) 1)
         (* Always process start of line *)
-        |> fun l -> 0::l@type_at_locations
+        |> fun l -> 0::l@type_after_locations
       in
       In_channel.read_lines filename
       |> List.map ~f:to_token_range
@@ -371,13 +375,13 @@ let process_file filename =
           with _ -> None)
       |> List.dedup ~compare:String.compare)
 
-let header root =
+let header host root =
   { Export.default with
     id = Int.to_string (fresh ())
   ; entry_type = "vertex"
   ; label = "metaData"
   ; version = Some "0.4.0"
-  ; project_root = Some ("file://"^root)
+  ; project_root = Some ("file://"^host^root)
   ; tool_info = Some { name = "lsif-ocaml"; version = "0.1.0" }
   ; position_encoding = Some "utf-16"
   }
@@ -390,7 +394,7 @@ let project () =
   ; kind = Some "OCaml"
   }
 
-let document local_root project_root filepath =
+let document local_root local_subdir host project_root filepath =
   let contents_base64 =
     In_channel.read_all filepath
     |> Base64.Websafe.encode
@@ -402,7 +406,7 @@ let document local_root project_root filepath =
   { Export.default with
     entry_type = "vertex"
   ; label = "document"
-  ; uri = Some ("file://"^filepath_relative_project_root)
+  ; uri = Some ("file://"^host^filepath_relative_project_root)
   ; language_id = Some "OCaml"
   ; contents = Some contents_base64
   }
@@ -415,7 +419,7 @@ let connect_ranges results document_id =
   in
   connect ~out_v:document_id ~in_vs ~label:"contains" ()
 
-let paths root =
+let paths root subdir =
   let f acc ~depth ~absolute_path ~is_file =
     let is_ml_or_re_file =
       if is_file then
@@ -432,7 +436,7 @@ let paths root =
     else
       Continue acc
   in
-  fold_directory root ~init:[] ~f
+  fold_directory (root^/subdir) ~init:[] ~f
 
 let print =
   Fn.compose
@@ -446,11 +450,11 @@ let process_filepath project_id filepath =
 let () =
   Scheduler.Daemon.check_entry_point ();
   match Sys.argv |> Array.to_list with
-  | _ :: local_root :: project_root :: n :: _ ->
+  | _ :: local_root :: local_subdir :: host :: project_root :: n :: _ ->
     let number_of_workers = if parallel then Int.of_string n else 1 in
     let scheduler = Scheduler.create ~number_of_workers () in
-    let paths = paths local_root in
-    let header = header project_root in
+    let paths = paths local_root local_subdir in
+    let header = header host project_root in
     let project = project () in
     Format.printf "%s@." @@ print header;
     Format.printf "%s@." @@ print project;
@@ -472,7 +476,7 @@ let () =
     in
     (* Generate IDs and connect vertices sequentially. *)
     List.iter results ~f:(fun { filepath; hovers } ->
-        let document = document local_root project_root filepath in
+        let document = document local_root local_subdir host project_root filepath in
         let document = { document with id = Int.to_string (fresh ()) } in
         Format.printf "%s@." @@ print document;
         let document_in_project_edge =
@@ -502,4 +506,4 @@ let () =
       try Scheduler.destroy scheduler
       with Unix.Unix_error (_,"kill",_) -> ()
     end
-  | _ -> failwith {|Supply a "local root (absolute path)" "project root (/github.com/my/proj)" "nprocs"|}
+  | _ -> failwith {|Supply a "local root (absolute path)" "local subdir" "/github.com" "project root (/my/proj)" "nprocs"|}

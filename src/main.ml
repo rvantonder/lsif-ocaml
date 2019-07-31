@@ -456,6 +456,10 @@ let () =
     Format.printf "%s@." @@ print project;
     (* Get type information in parallel. *)
     let results =
+      List.map paths ~f:(fun filepath -> { filepath; hovers = process_filepath project.id filepath })
+    in
+(*
+    let results =
       Scheduler.map_reduce
         scheduler
         paths
@@ -470,6 +474,7 @@ let () =
             documents_result@all_document_results)
         ~reduce:(@)
     in
+   *)
     (* Generate IDs and connect vertices sequentially. *)
     List.iter results ~f:(fun { filepath; hovers } ->
         let document = document local_root local_subdir host project_root filepath in
@@ -502,4 +507,4 @@ let () =
       try Scheduler.destroy scheduler
       with Unix.Unix_error (_,"kill",_) -> ()
     end
-  | _ -> failwith {|Supply a "local root (absolute path)" "local subdir" "/github.com" "project root (/my/proj)" "nprocs"|}
+  | _ -> failwith {|Supply a "local root (absolute path)" "local subdir (will be x/y in /github.com/my/proj/x/y)" "/github.com" "project root (/my/proj)" "nprocs"|}

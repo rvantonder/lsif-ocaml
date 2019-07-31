@@ -201,7 +201,7 @@ let read_with_timeout read_from_channels =
 let read_source_from_stdin args source =
   let open Unix.Process_channels in
   let Unix.Process_info.{ stdin; stdout; stderr; pid } =
-    Unix.create_process ~prog:"ocamlmerlin" ~args
+    Unix.create_process ~prog:"/Users/rvt/merlin/ocamlmerlin" ~args
   in
   let stdin = Unix.out_channel_of_descr stdin in
   let stdout = Unix.in_channel_of_descr stdout in
@@ -209,7 +209,7 @@ let read_source_from_stdin args source =
   Out_channel.output_string stdin source;
   Out_channel.flush stdin;
   Out_channel.close stdin;
-  let result = read_with_timeout [stdout; stderr] in
+  let result = read_with_timeout [stdout] in
   In_channel.close stdout;
   In_channel.close stderr;
   Out_channel.close stdin;
@@ -229,13 +229,11 @@ let lookup_dot_merlin filename =
       None
     end
 
-let call_merlin ~filename ~source ~line ~character ~query ~dot_merlin =
-  let line = Int.to_string line in
-  let character = Int.to_string character in
+let call_merlin ~filename ~source ~query ~dot_merlin =
   let args =
     [ "server"
     ; query
-    ; "-position"; line^":"^character
+    ; "-position"; "1:1" (* place holder hack *)
     ; "-index"; "0"
     ; filename
     ] @ dot_merlin
@@ -248,13 +246,28 @@ let to_lsif_hover merlin_results : hover_result_vertices list =
   let open Import in
   List.fold merlin_results ~init:[] ~f:(fun acc result ->
       if debug then Format.printf "Merlin result: %s@." result;
-      let json = Json.from_string result in
-      if debug then Format.printf "JSON: %s@." @@ Json.pretty_to_string json;
+      let xjson =
+        if result = "" then
+          (* if its empty, just make it list [] which will make it None below *)
+          `List []
+        else
+          Json.from_string result
+      in
+      (* the new merlin format returns the object as a single element in a list. unbox it. *)
+      let hd = match xjson with
+        | `List [`Assoc body] -> `Assoc body
+        | `List (`Assoc body::_) -> `Assoc body
+        | `List [] -> `Assoc []
+        | json ->
+          if debug then Format.eprintf "Ignoring other json: %s@." @@ Json.pretty_to_string json;
+          `Assoc []
+      in
+      if debug then Format.printf "JSON: %s@." @@ Json.pretty_to_string hd;
       let exported =
-        let imported =
-          match Json.Util.member "value" json with
-          | `List [hd]
-          | `List (hd::_) ->
+        if hd = `Assoc [] then
+          None
+        else
+          let imported =
             let start = Json.Util.member "start" hd in
             let start_line = Json.Util.member "line" start in
             let start_character = Json.Util.member "col" start in
@@ -270,49 +283,47 @@ let to_lsif_hover merlin_results : hover_result_vertices list =
             read_int end_character >>= fun end_character ->
             read_string type_info >>= fun type_info ->
             return { start_line; start_character; end_line; end_character; type_info }
-          | `List [] -> None
-          | _ -> failwith "Unexpected merlin result type in 'value' field."
-        in
-        imported >>= fun { start_line; start_character; end_line; end_character; type_info }  ->
-        let result_set_vertex =
-          { Export.default with
-            entry_type = "vertex"
-          ; label = "resultSet"
-          ; result = None
-          }
-        in
-        let range_vertex =
-          { Export.default with
-            entry_type = "vertex"
-          ; label = "range"
-          ; start =
-              Some
-                { line = start_line - 1
-                ; character = start_character
-                }
-          ; end_ =
-              Some
-                { line = end_line -1
-                ; character = end_character
-                }
-          }
-        in
-        let type_info_vertex =
-          { Export.default with
-            entry_type = "vertex"
-          ; label = "hoverResult"
-          ; result =
-              Some
-                (Hover
-                   { contents = [
-                         { language = "OCaml"
-                         ; value = type_info
-                         }
-                       ]
-                   })
-          }
-        in
-        return { result_set_vertex; range_vertex; type_info_vertex }
+          in
+          imported >>= fun { start_line; start_character; end_line; end_character; type_info }  ->
+          let result_set_vertex =
+            { Export.default with
+              entry_type = "vertex"
+            ; label = "resultSet"
+            ; result = None
+            }
+          in
+          let range_vertex =
+            { Export.default with
+              entry_type = "vertex"
+            ; label = "range"
+            ; start =
+                Some
+                  { line = start_line - 1
+                  ; character = start_character
+                  }
+            ; end_ =
+                Some
+                  { line = end_line -1
+                  ; character = end_character
+                  }
+            }
+          in
+          let type_info_vertex =
+            { Export.default with
+              entry_type = "vertex"
+            ; label = "hoverResult"
+            ; result =
+                Some
+                  (Hover
+                     { contents = [
+                           { language = "OCaml"
+                           ; value = type_info
+                           }
+                         ]
+                     })
+            }
+          in
+          return { result_set_vertex; range_vertex; type_info_vertex }
       in
       match exported with
       | Some result -> result::acc
@@ -356,24 +367,9 @@ let process_file filename =
       |> List.map ~f:to_token_range
   in
   let source = In_channel.read_all filename in
-  to_lsif_hover @@
-  List.foldi line_ranges ~init:[] ~f:(fun line acc character_ranges ->
-      Format.eprintf "%s " filename;
-      Format.eprintf "%2.0f%%%!" ((Int.to_float line) /. (Int.to_float (List.length line_ranges)) *. 100.0);
-      Format.eprintf "\x1b[999D";
-      Format.eprintf "\x1b[2K";
-      List.fold character_ranges ~init:acc ~f:(fun acc character ->
-          let merlin_result = call_merlin ~filename ~source ~line:(line+1) ~character ~query ~dot_merlin in
-          merlin_result::acc)
-      (* Remove merlin timing and notifications fields so we can dedup. Dedup after each line. *)
-      |> List.filter_map ~f:(fun s ->
-          try
-            let json = Json.from_string s in
-            let class_ = Json.Util.member "class" json in
-            let value = Json.Util.member "value" json in
-            Some (Json.to_string @@ `Assoc ["class", class_; "value", value])
-          with _ -> None)
-      |> List.dedup ~compare:String.compare)
+  let merlin_result = call_merlin ~filename ~source ~query ~dot_merlin in
+  let merlin_result = String.split_lines merlin_result in
+  to_lsif_hover merlin_result
 
 let header host root =
   { Export.default with

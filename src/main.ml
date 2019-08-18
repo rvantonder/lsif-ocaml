@@ -13,29 +13,7 @@ let fresh () =
   i := !i + 1;
   Int.to_string id
 
-(* Skip or continue directory descent. *)
-type 'a next =
-  | Skip of 'a
-  | Continue of 'a
-
-let fold_directory root ~init ~f =
-  let rec aux acc absolute_path depth =
-    if Sys.is_file absolute_path = `Yes then
-      match f acc ~depth ~absolute_path ~is_file:true with
-      | Continue acc
-      | Skip acc -> acc
-    else if Sys.is_directory absolute_path = `Yes then
-      match f acc ~depth ~absolute_path ~is_file:false with
-      | Skip acc -> acc
-      | Continue acc ->
-        Sys.ls_dir absolute_path
-        |> List.fold ~init:acc ~f:(fun acc subdir ->
-            aux acc (Filename.concat absolute_path subdir) (depth + 1))
-    else
-      acc
-  in
-  aux init root (-1)
-
+(** LSIF export types. *)
 module Export = struct
   type tool_info =
     { name : string
@@ -162,7 +140,8 @@ module Export = struct
       ; result =
           Some
             (Hover
-               { contents = [
+               { contents =
+                   [
                      { language = "OCaml"
                      ; value
                      }
@@ -187,7 +166,7 @@ module Export = struct
   end
 end
 
-(** Merlin responses. *)
+(** Merlin's response. *)
 module Import = struct
   type location =
     { line : int
@@ -219,6 +198,30 @@ module Import = struct
     | Type_info of type_info
     | Definition of definition_info
 end
+
+(** Skip or continue directory descent. *)
+type 'a next =
+  | Skip of 'a
+  | Continue of 'a
+
+let fold_directory root ~init ~f =
+  let rec aux acc absolute_path depth =
+    if Sys.is_file absolute_path = `Yes then
+      match f acc ~depth ~absolute_path ~is_file:true with
+      | Continue acc
+      | Skip acc -> acc
+    else if Sys.is_directory absolute_path = `Yes then
+      match f acc ~depth ~absolute_path ~is_file:false with
+      | Skip acc -> acc
+      | Continue acc ->
+        Sys.ls_dir absolute_path
+        |> List.fold ~init:acc ~f:(fun acc subdir ->
+            aux acc (Filename.concat absolute_path subdir) (depth + 1))
+    else
+      acc
+  in
+  aux init root (-1)
+
 
 type hover_result_vertices =
   { result_set_vertex : Export.entry
@@ -264,7 +267,7 @@ let connect ?out_v ?in_v ?in_vs ?document ~label () =
     ; document
     }
   else
-    failwith "Do not call with both in_v and in_vs"
+    failwith "Do not call connect with both in_v and in_vs"
 
 let to_lsif merlin_results : intermediate_result =
   let open Export in
@@ -272,7 +275,6 @@ let to_lsif merlin_results : intermediate_result =
   let open Option in
   let init = { hovers = []; definitions = [] } in
   List.fold merlin_results ~init ~f:(fun acc merlin_result ->
-      if debug then Format.printf "Merlin result: %s@." merlin_result;
       let json = Json.from_string merlin_result in
       let result =
         match type_info_of_yojson json with
@@ -329,7 +331,7 @@ let to_lsif merlin_results : intermediate_result =
 
 let process_filepath filename =
   if debug then Format.printf "File: %s@." filename;
-  In_channel.read_all (filename ^ ".lsif")
+  In_channel.read_all (filename ^ ".lsif.in")
   |> String.split_lines
   |> to_lsif
 

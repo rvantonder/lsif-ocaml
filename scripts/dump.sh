@@ -16,7 +16,7 @@ for f in $FILES; do
   if [[ -f "$FILE_DIR/.merlin" ]]; then
     ((i++))
     printf "(%4d/%4d) %s\n" "$i" "$N_FILES" "$f"
-    cat "$f" | $MERLIN_BINARY server lsif "$f" "-dot-merlin" "$FILE_DIR/.merlin" > "$f.lsif" # &
+    cat "$f" | $MERLIN_BINARY server lsif "$f" "-dot-merlin" "$FILE_DIR/.merlin" > "$f.lsif.in" # &
   fi
 done
 

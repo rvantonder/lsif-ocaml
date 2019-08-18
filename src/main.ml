@@ -1,6 +1,5 @@
 open Core
 
-module Time = Core_kernel.Time_ns.Span
 module Json = Yojson.Safe
 
 let debug = Option.is_some (Sys.getenv "DEBUG_OCAML_LSIF")
@@ -14,7 +13,7 @@ let fresh () =
   i := !i + 1;
   Int.to_string id
 
-(* skip or continue directory descent *)
+(* Skip or continue directory descent. *)
 type 'a next =
   | Skip of 'a
   | Continue of 'a

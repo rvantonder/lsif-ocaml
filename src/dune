@@ -10,4 +10,4 @@
 
 (install
  (section bin)
- (files (main.exe as ocaml-lsif)))
+ (files (main.exe as lsif-ocaml)))

@@ -1,9 +1,9 @@
-all: build ocaml-lsif
+all: build lsif-ocaml
 
 build:
 	dune build
 
-ocaml-lsif:
+lsif-ocaml:
 	ln -s _build/install/default/bin/$@ ./$@
 
 install:

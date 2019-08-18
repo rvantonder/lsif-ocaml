@@ -1,5 +1,10 @@
-all:
-	dune build @install
+all: build ocaml-lsif
+
+build:
+	dune build
+
+ocaml-lsif:
+	ln -s _build/install/default/bin/$@ ./$@
 
 install:
 	dune install
@@ -16,5 +21,4 @@ uninstall:
 promote:
 	dune promote
 
-.PHONY: all install test clean uninstall
-
+.PHONY: all build install test clean uninstall

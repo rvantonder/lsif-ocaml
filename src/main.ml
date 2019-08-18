@@ -1,27 +1,25 @@
 open Core
-open Base64
-open Hack_parallel
 
 module Time = Core_kernel.Time_ns.Span
 module Json = Yojson.Safe
 
 let debug = Option.is_some (Sys.getenv "DEBUG_OCAML_LSIF")
-let tokenize = true
-let parallel = true
+let emit_type_hovers = true
+let emit_definitions = true
 
 let i : int ref = ref 1
 
 let fresh () =
   let id = !i in
   i := !i + 1;
-  id
+  Int.to_string id
 
 (* skip or continue directory descent *)
 type 'a next =
   | Skip of 'a
   | Continue of 'a
 
-let fold_directory ?(sorted=false) root ~init ~f =
+let fold_directory root ~init ~f =
   let rec aux acc absolute_path depth =
     if Sys.is_file absolute_path = `Yes then
       match f acc ~depth ~absolute_path ~is_file:true with
@@ -114,6 +112,8 @@ module Export = struct
     ; in_vs : string list option
           [@key "inVs"]
           [@default None]
+    ; document : int option
+          [@default None]
     }
   [@@deriving yojson]
 
@@ -136,279 +136,235 @@ module Export = struct
     ; in_v = None
     ; out_vs = None
     ; in_vs = None
+    ; document = None
     }
+
+  module Vertex = struct
+    let range start_line start_character end_line end_character =
+      { default with
+        entry_type = "vertex"
+      ; label = "range"
+      ; start =
+          Some
+            { line = start_line
+            ; character = start_character
+            }
+      ; end_ =
+          Some
+            { line = end_line
+            ; character = end_character
+            }
+      }
+
+    let hover_result value =
+      { default with
+        entry_type = "vertex"
+      ; label = "hoverResult"
+      ; result =
+          Some
+            (Hover
+               { contents = [
+                     { language = "OCaml"
+                     ; value
+                     }
+                   ]
+               })
+      }
+
+    let definition_result () =
+      { default with
+        entry_type = "vertex"
+      ; label = "definitionResult"
+      ; result = None
+      }
+
+    let result_set () =
+      { default with
+        entry_type = "vertex"
+      ; label = "resultSet"
+      ; result = None
+      }
+
+  end
 end
 
 (** Merlin responses. *)
 module Import = struct
-  type t =
-    { start_line : int
-    ; start_character : int
-    ; end_line : int
-    ; end_character : int
-    ; type_info : string
+  type location =
+    { line : int
+    ; col : int
     }
+  [@@deriving of_yojson]
+
+  type type_info =
+    { start: location
+    ; end_: location [@key "end"]
+    ; type_ : string [@key "type"]
+    }
+  [@@deriving of_yojson]
+
+  type definition_content =
+    { file : string
+    ; pos : location
+    }
+  [@@deriving of_yojson]
+
+  type definition_info =
+    { start: location
+    ; end_: location [@key "end"]
+    ; definition : definition_content
+    }
+  [@@deriving of_yojson]
+
+  type t =
+    | Type_info of type_info
+    | Definition of definition_info
 end
 
-(** Intermediate type so that edges and IDs can be connected after parallel vertex generation. *)
 type hover_result_vertices =
   { result_set_vertex : Export.entry
   ; range_vertex : Export.entry
   ; type_info_vertex : Export.entry
   }
 
-type filepath_hover_results =
-  { filepath : string
-  ; hovers : hover_result_vertices list
+type definition_result_vertices =
+  { declaration_result_set_vertex : Export.entry
+  ; declaration_range_vertex : Export.entry
+  ; reference_range_vertex : Export.entry
+  ; definition_result_vertex : Export.entry
+  ; destination_file : string
   }
 
-let connect ?out_v ?in_v ?in_vs ~label () =
+type intermediate_result =
+  { hovers : hover_result_vertices list
+  ; definitions : definition_result_vertices list
+  }
+
+type filepath_hover_results =
+  { filepath : string
+  ; result : intermediate_result
+  }
+
+let connect ?out_v ?in_v ?in_vs ?document ~label () =
   if Option.is_some in_v then
     { Export.default with
-      id = Int.to_string (fresh ())
+      id = fresh ()
     ; entry_type = "edge"
     ; label
     ; out_v
     ; in_v
+    ; document
     }
   else if Option.is_some in_vs then
     { Export.default with
-      id = Int.to_string (fresh ())
+      id = fresh ()
     ; entry_type = "edge"
     ; label
     ; out_v
     ; in_vs
+    ; document
     }
   else
     failwith "Do not call with both in_v and in_vs"
 
-let read_with_timeout read_from_channels =
-  let read_from_fds = List.map ~f:Unix.descr_of_in_channel read_from_channels in
-  let read_from_channels =
-    Unix.select
-      ~restart:true
-      ~read:read_from_fds
-      ~write:[]
-      ~except:[]
-      ~timeout:(`After (Time.of_int_sec 1))
-      ()
-    |> (fun { Unix.Select_fds.read; _ } -> read)
-    |> List.map ~f:Unix.in_channel_of_descr
-  in
-  List.map read_from_channels ~f:In_channel.input_all
-  |> String.concat ~sep:"\n"
-
-let read_source_from_stdin args source =
-  let open Unix.Process_channels in
-  let Unix.Process_info.{ stdin; stdout; stderr; pid } =
-    Unix.create_process ~prog:"ocamlmerlin" ~args
-  in
-  let stdin = Unix.out_channel_of_descr stdin in
-  let stdout = Unix.in_channel_of_descr stdout in
-  let stderr = Unix.in_channel_of_descr stderr in
-  Out_channel.output_string stdin source;
-  Out_channel.flush stdin;
-  Out_channel.close stdin;
-  let result = read_with_timeout [stdout; stderr] in
-  In_channel.close stdout;
-  In_channel.close stderr;
-  Out_channel.close stdin;
-  let finished = Unix.waitpid pid in
-  result
-
-let lookup_dot_merlin filename =
-  let dot_merlin_path = Filename.dirname filename ^/ ".merlin" in
-  if Sys.is_file dot_merlin_path = `Yes then
-    begin
-      if debug then Format.printf "Merlin: %s@." dot_merlin_path;
-      Some dot_merlin_path
-    end
-  else
-    begin
-      if debug then Format.printf "NO MERLIN: %s@." dot_merlin_path;
-      None
-    end
-
-let call_merlin ~filename ~source ~line ~character ~query ~dot_merlin =
-  let line = Int.to_string line in
-  let character = Int.to_string character in
-  let args =
-    [ "server"
-    ; query
-    ; "-position"; line^":"^character
-    ; "-index"; "0"
-    ; filename
-    ] @ dot_merlin
-  in
-  read_source_from_stdin args source
-
-let to_lsif_hover merlin_results : hover_result_vertices list =
+let to_lsif merlin_results : intermediate_result =
   let open Export in
-  let open Option in
   let open Import in
-  List.fold merlin_results ~init:[] ~f:(fun acc result ->
-      if debug then Format.printf "Merlin result: %s@." result;
-      let json = Json.from_string result in
-      if debug then Format.printf "JSON: %s@." @@ Json.pretty_to_string json;
+  let open Option in
+  let init = { hovers = []; definitions = [] } in
+  List.fold merlin_results ~init ~f:(fun acc merlin_result ->
+      if debug then Format.printf "Merlin result: %s@." merlin_result;
+      let json = Json.from_string merlin_result in
+      let result =
+        match type_info_of_yojson json with
+        | Ok t -> Some (Type_info t)
+        | Error _ ->
+          match definition_info_of_yojson json with
+          | Ok d -> Some (Definition d)
+          | Error _ ->
+            if debug then Format.eprintf "Ignoring other json: %s@." @@ Json.pretty_to_string json;
+            None
+      in
       let exported =
-        let imported =
-          match Json.Util.member "value" json with
-          | `List [hd]
-          | `List (hd::_) ->
-            let start = Json.Util.member "start" hd in
-            let start_line = Json.Util.member "line" start in
-            let start_character = Json.Util.member "col" start in
-            let end_ = Json.Util.member "end" hd in
-            let end_line = Json.Util.member "line" end_ in
-            let end_character = Json.Util.member "col" end_ in
-            let type_info = Json.Util.member "type" hd in
-            let read_int x = try Json.Util.to_int x |> Option.some with _ -> None in
-            let read_string x = try Json.Util.to_string x |> Option.some with _ -> None in
-            read_int start_line >>= fun start_line ->
-            read_int start_character >>= fun start_character ->
-            read_int end_line >>= fun end_line ->
-            read_int end_character >>= fun end_character ->
-            read_string type_info >>= fun type_info ->
-            return { start_line; start_character; end_line; end_character; type_info }
-          | `List [] -> None
-          | _ -> failwith "Unexpected merlin result type in 'value' field."
-        in
-        imported >>= fun { start_line; start_character; end_line; end_character; type_info }  ->
-        let result_set_vertex =
-          { Export.default with
-            entry_type = "vertex"
-          ; label = "resultSet"
-          ; result = None
-          }
-        in
-        let range_vertex =
-          { Export.default with
-            entry_type = "vertex"
-          ; label = "range"
-          ; start =
-              Some
-                { line = start_line - 1
-                ; character = start_character
-                }
-          ; end_ =
-              Some
-                { line = end_line -1
-                ; character = end_character
-                }
-          }
-        in
-        let type_info_vertex =
-          { Export.default with
-            entry_type = "vertex"
-          ; label = "hoverResult"
-          ; result =
-              Some
-                (Hover
-                   { contents = [
-                         { language = "OCaml"
-                         ; value = type_info
-                         }
-                       ]
-                   })
-          }
-        in
-        return { result_set_vertex; range_vertex; type_info_vertex }
+        result >>= function
+        | Type_info { start; end_; type_ } ->
+          let result_set_vertex = Vertex.result_set () in
+          let range_vertex = Vertex.range (start.line - 1) start.col (end_.line - 1) end_.col in
+          let type_info_vertex = Vertex.hover_result type_ in
+          return (`Hover { result_set_vertex; range_vertex; type_info_vertex })
+        | Definition { start; end_; definition = { file; pos } } ->
+          (* Create a resultSet vertex for the range where this definition is *)
+          let declaration_result_set_vertex = Vertex.result_set () in
+          (* Create the vertex range for it *)
+          let declaration_range_vertex = Vertex.range (pos.line - 1) (pos.col - 1) (pos.line - 1) (pos.col - 1) in
+          (* Create an edge with 'next' to connect resultSet and declaration range above. *)
+
+          (* Create a range vertex for the reference range *)
+          (*
+          if end_.col = -1 then
+            (* this happens when "not in environment type" *)
+            failwith (Format.sprintf "end_.col is -1 for merlin result: %s" merlin_result);
+*)
+          let reference_range_vertex = Vertex.range (start.line - 1) start.col (end_.line - 1) end_.col in
+          (* Create a 'next' edge to the result_set above *)
+
+          (* Create a definitionResult vertex *)
+          let definition_result_vertex = Vertex.definition_result () in
+          (* Connect the definitionResult above to the resultset with textDocument/definition edge *)
+
+          (* Add "item" edge to connect the definitionResult vertex to the range for a particular document (id) *)
+          let destination_file = file in
+          return
+            (`Definition
+               { declaration_result_set_vertex
+               ; declaration_range_vertex
+               ; reference_range_vertex
+               ; definition_result_vertex
+               ; destination_file
+               })
       in
       match exported with
-      | Some result -> result::acc
+      | Some (`Hover result) -> { acc with hovers = result::acc.hovers }
+      | Some (`Definition result) -> { acc with definitions = result::acc.definitions }
       | None -> acc)
-  |> List.rev
 
-let process_file filename =
+let process_filepath filename =
   if debug then Format.printf "File: %s@." filename;
-  let query = "type-enclosing" in
-  let dot_merlin =
-    match lookup_dot_merlin filename with
-    | Some dot_merlin -> ["-dot-merlin"; dot_merlin]
-    | None -> []
-  in
-  let line_ranges =
-    if not tokenize then
-      In_channel.read_lines filename
-      |> List.map ~f:String.length
-      |> List.map ~f:(List.range 0)
-    else
-      (* Roughly, split each line into tokens, and put the cursor right after whitespace and tokens. *)
-      let to_token_range line =
-        let chars =
-          ["!"; "\""; "#"; "$"; "%"; "&"; "'"; "*"; "+"
-          ; ","; "-"; "."; "/"; ":"; ";"; "<"; "="; ">"
-          ; "?"; "@"; ","; "("; ")"; "{"; "}"; "["; "]"
-          ; "~"; "`"] in
-        let type_at_locations =
-          List.concat_map chars ~f:(fun pattern -> String.substr_index_all line ~may_overlap:false ~pattern)
-        in
-        let type_after_locations =
-          type_at_locations
-          |> List.map ~f:((+) 1)
-        in
-        String.substr_index_all line ~may_overlap:false ~pattern:" "
-        |> List.map ~f:((+) 1)
-        (* Always process start of line *)
-        |> fun l -> 0::l@type_after_locations
-      in
-      In_channel.read_lines filename
-      |> List.map ~f:to_token_range
-  in
-  let source = In_channel.read_all filename in
-  to_lsif_hover @@
-  List.foldi line_ranges ~init:[] ~f:(fun line acc character_ranges ->
-      Format.eprintf "%s " filename;
-      Format.eprintf "%2.0f%%%!" ((Int.to_float line) /. (Int.to_float (List.length line_ranges)) *. 100.0);
-      Format.eprintf "\x1b[999D";
-      Format.eprintf "\x1b[2K";
-      List.fold character_ranges ~init:acc ~f:(fun acc character ->
-          let merlin_result = call_merlin ~filename ~source ~line:(line+1) ~character ~query ~dot_merlin in
-          merlin_result::acc)
-      (* Remove merlin timing and notifications fields so we can dedup. Dedup after each line. *)
-      |> List.filter_map ~f:(fun s ->
-          try
-            let json = Json.from_string s in
-            let class_ = Json.Util.member "class" json in
-            let value = Json.Util.member "value" json in
-            Some (Json.to_string @@ `Assoc ["class", class_; "value", value])
-          with _ -> None)
-      |> List.dedup ~compare:String.compare)
+  In_channel.read_all (filename ^ ".lsif")
+  |> String.split_lines
+  |> to_lsif
 
 let header host root =
   { Export.default with
-    id = Int.to_string (fresh ())
+    id = fresh ()
   ; entry_type = "vertex"
   ; label = "metaData"
   ; version = Some "0.4.0"
-  ; project_root = Some ("file://"^host^root)
+  ; project_root = Some ("file:///"^host^/root)
   ; tool_info = Some { name = "lsif-ocaml"; version = "0.1.0" }
   ; position_encoding = Some "utf-16"
   }
 
 let project () =
   { Export.default with
-    id = Int.to_string (fresh ())
+    id = fresh ()
   ; entry_type = "vertex"
   ; label = "project"
   ; kind = Some "OCaml"
   }
 
-let document local_root local_subdir host project_root filepath =
-  let contents_base64 =
-    In_channel.read_all filepath
+let make_document host project_root relative_filepath absolute_filepath =
+  let _contents_base64 =
+    In_channel.read_all absolute_filepath
     |> Base64.Websafe.encode
-  in
-  let filepath_relative_project_root =
-    let relative_filepath = String.chop_prefix_exn filepath ~prefix:local_root in
-    project_root ^/ relative_filepath
   in
   { Export.default with
     entry_type = "vertex"
   ; label = "document"
-  ; uri = Some ("file://"^host^filepath_relative_project_root)
+  ; uri = Some ("file:///"^host^/project_root^/relative_filepath)
   ; language_id = Some "OCaml"
-  ; contents = Some contents_base64
+  (* FIXME *)
+  ; contents = None
   }
 
 let connect_ranges results document_id =
@@ -419,11 +375,11 @@ let connect_ranges results document_id =
   in
   connect ~out_v:document_id ~in_vs ~label:"contains" ()
 
-let paths root subdir =
-  let f acc ~depth ~absolute_path ~is_file =
+let paths root =
+  let f acc ~depth:_ ~absolute_path ~is_file =
     let is_ml_or_re_file =
       if is_file then
-        [".ml"; ".mli"; ".re"; ".rei"]
+        [".ml"; ".mli" (*; ".re"; ".rei" *) ]
         |> List.exists ~f:(fun suffix -> String.is_suffix ~suffix absolute_path)
       else
         false
@@ -436,74 +392,176 @@ let paths root subdir =
     else
       Continue acc
   in
-  fold_directory (root^/subdir) ~init:[] ~f
+  fold_directory root ~init:[] ~f
 
 let print =
   Fn.compose
     Json.to_string
     Export.entry_to_yojson
 
-let process_filepath project_id filepath =
-  if debug then Format.printf "File: %s@." filepath;
-  process_file filepath
+(* scheme:
+   file:///<host>/<project_root>/prefx-stripped-from-local-absolute-root
+*)
+type flags =
+  { host : string (* e.g., github.com. *)
+  ; project_root : string (* under the host, e.g., github.com/project/root *)
+  ; local_absolute_root : string (* absolute path of local root or file to index *)
+  ; strip_prefix : string (* the prefix to strip from the absolute root *)
+  (* ; type_info_only : bool *)
+  (* ; include_base64 : bool *)
+  }
 
 let () =
-  Scheduler.Daemon.check_entry_point ();
   match Sys.argv |> Array.to_list with
-  | _ :: local_root :: local_subdir :: host :: project_root :: n :: _ ->
-    let number_of_workers = if parallel then Int.of_string n else 1 in
-    let scheduler = Scheduler.create ~number_of_workers () in
-    let paths = paths local_root local_subdir in
+  | _ :: local_absolute_root :: strip_prefix :: host :: project_root :: _ ->
+    let paths = paths local_absolute_root in
     let header = header host project_root in
     let project = project () in
     Format.printf "%s@." @@ print header;
     Format.printf "%s@." @@ print project;
-    (* Get type information in parallel. *)
-    let results =
-      Scheduler.map_reduce
-        scheduler
-        paths
-        ~init:[]
-        ~map:(fun all_document_results document_paths ->
-            let documents_result =
-              List.map document_paths ~f:(fun document_path ->
-                  { filepath = document_path
-                  ; hovers = process_filepath project.id document_path
-                  })
-            in
-            documents_result@all_document_results)
-        ~reduce:(@)
-    in
+    let results = List.map paths ~f:(fun filepath -> { filepath; result = process_filepath filepath }) in
     (* Generate IDs and connect vertices sequentially. *)
-    List.iter results ~f:(fun { filepath; hovers } ->
-        let document = document local_root local_subdir host project_root filepath in
-        let document = { document with id = Int.to_string (fresh ()) } in
-        Format.printf "%s@." @@ print document;
-        let document_in_project_edge =
-          connect ~out_v:project.id ~in_vs:[document.id] ~label:"contains" ()
+    let document_id_table = String.Table.create () in
+    List.iter results ~f:(fun { filepath = absolute_filepath; result = { hovers; definitions } } ->
+        let relative_filepath = String.chop_prefix_exn absolute_filepath ~prefix:strip_prefix in
+        let document = make_document host project_root relative_filepath absolute_filepath in
+        (* add document to table. Not needed for type hovers... only definitions *)
+        let document =
+          match String.Table.find document_id_table absolute_filepath with
+          | Some id -> { document with id = Int.to_string id }
+          | None ->
+            let id = Int.of_string (fresh ()) in
+            String.Table.add_exn document_id_table ~key:absolute_filepath ~data:id;
+            let document = { document with id = Int.to_string id } in
+            Format.printf "%s@." @@ print document;
+            let document_in_project_edge =
+              connect ~out_v:project.id ~in_vs:[document.id] ~label:"contains" ()
+            in
+            Format.printf "%s@." @@ print document_in_project_edge;
+            document
         in
-        Format.printf "%s@." @@ print document_in_project_edge;
-        let hovers =
-          List.concat_map hovers ~f:(fun { result_set_vertex; range_vertex; type_info_vertex } ->
-              let result_set_vertex = { result_set_vertex with id = Int.to_string (fresh ()) } in
-              let range_vertex = { range_vertex with id = Int.to_string (fresh ()) } in
-              (* Connect range (outV) to resultSet (inV). *)
-              let result_set_edge =
-                connect ~out_v:range_vertex.id ~in_v:result_set_vertex.id ~label:"next" ()
-              in
-              let type_info_vertex = { type_info_vertex with id = Int.to_string (fresh ()) } in
-              (* Connect resultSet (outV) to hoverResult (inV). *)
-              let hover_edge =
-                connect ~in_v:type_info_vertex.id ~out_v:result_set_vertex.id ~label:"textDocument/hover" ()
-              in
-              [result_set_vertex; range_vertex; result_set_edge; type_info_vertex; hover_edge]
-            )
-        in
-        List.iter hovers ~f:(fun entry -> Format.printf "%s@." @@ print entry);
-        let edges_entry = connect_ranges hovers document.id in
-        Format.printf "%s@." @@ print edges_entry);
-    begin
-      try Scheduler.destroy scheduler
-      with Unix.Unix_error (_,"kill",_) -> ()
-    end
-  | _ -> failwith {|Supply a "local root (absolute path)" "local subdir" "/github.com" "project root (/my/proj)" "nprocs"|}
+        if emit_type_hovers then
+          begin
+            (* Reverse list for in-order printing *)
+            let hovers = List.rev hovers in
+            (* Emit type info *)
+            let hovers =
+              List.concat_map hovers ~f:(fun { result_set_vertex; range_vertex; type_info_vertex } ->
+                  let result_set_vertex = { result_set_vertex with id = fresh () } in
+                  let range_vertex = { range_vertex with id = fresh () } in
+                  (* Connect range (outV) to resultSet (inV). *)
+                  let result_set_edge =
+                    connect ~out_v:range_vertex.id ~in_v:result_set_vertex.id ~label:"next" ()
+                  in
+                  let type_info_vertex = { type_info_vertex with id = fresh () } in
+                  (* Connect resultSet (outV) to hoverResult (inV). *)
+                  let hover_edge =
+                    connect ~in_v:type_info_vertex.id ~out_v:result_set_vertex.id ~label:"textDocument/hover" ()
+                  in
+                  [result_set_vertex; range_vertex; result_set_edge; type_info_vertex; hover_edge]
+                )
+            in
+            if hovers <> [] then
+              begin
+                List.iter hovers ~f:(fun entry -> Format.printf "%s@." @@ print entry);
+                let edges_entry = connect_ranges hovers document.id in
+                Format.printf "%s@." @@ print edges_entry;
+              end
+          end;
+        (* Emit definitions *)
+        if emit_definitions then
+          begin
+            let definitions =
+              List.concat_map
+                definitions
+                ~f:(fun
+                     { declaration_result_set_vertex
+                     ; declaration_range_vertex
+                     ; reference_range_vertex
+                     ; definition_result_vertex
+                     ; destination_file } ->
+                     let declaration_result_set_vertex = { declaration_result_set_vertex with id = fresh () } in
+                     let declaration_range_vertex = { declaration_range_vertex with id = fresh () } in
+                     let reference_range_vertex = { reference_range_vertex with id = fresh () } in
+                     let definition_result_vertex = { definition_result_vertex with id = fresh () } in
+                     let declaration_result_set_to_declaration_range_edge =
+                       connect
+                         ~out_v:declaration_range_vertex.id
+                         ~in_v:declaration_result_set_vertex.id
+                         ~label:"next"
+                         ()
+                     in
+                     let declaration_result_set_to_reference_range_edge =
+                       connect
+                         ~out_v:reference_range_vertex.id
+                         ~in_v:declaration_result_set_vertex.id
+                         ~label:"next"
+                         ()
+                     in
+                     let definition_result_to_declaration_result_set_edge =
+                       connect
+                         ~out_v:declaration_result_set_vertex.id
+                         ~in_v:definition_result_vertex.id
+                         ~label:"textDocument/definition"
+                         ()
+                     in
+                     let definition_result_to_document_and_range =
+                       let destination_file =
+                         match destination_file with
+                         | "*buffer*" -> absolute_filepath
+                         | filepath -> filepath
+                       in
+                       let document =
+                         match String.Table.find document_id_table destination_file with
+                         | Some id ->
+                           (* Already printed the previous time this was added to the table *)
+                           { document with id = Int.to_string id }
+                         | None ->
+                           let relative_filepath =
+                             match String.chop_prefix destination_file ~prefix:strip_prefix with
+                             | Some relative_filepath_in_project_path ->
+                               relative_filepath_in_project_path
+                             | None ->
+                               destination_file (* somewhere else, probably .opam *)
+                           in
+                           let document = make_document host project_root relative_filepath absolute_filepath in
+                           let id = Int.of_string (fresh ()) in
+                           String.Table.add_exn document_id_table ~key:destination_file ~data:id;
+                           let document = { document with id = Int.to_string id } in
+                           Format.printf "%s@." @@ print document;
+                           let document_in_project_edge =
+                             connect ~out_v:project.id ~in_vs:[document.id] ~label:"contains" ()
+                           in
+                           Format.printf "%s@." @@ print document_in_project_edge;
+                           document
+                       in
+                       connect
+                         ~out_v:definition_result_vertex.id
+                         ~in_vs:[declaration_range_vertex.id]
+                         ~document:(Int.of_string document.id)
+                         ~label:"item"
+                         ()
+                     in
+                     let single_definition_result =
+                       [ declaration_result_set_vertex
+                       ; declaration_range_vertex
+                       ; declaration_result_set_to_declaration_range_edge
+                       ; reference_range_vertex
+                       ; declaration_result_set_to_reference_range_edge
+                       ; definition_result_vertex
+                       ; definition_result_to_declaration_result_set_edge
+                       ; definition_result_to_document_and_range
+                       ]
+                     in
+                     (* can do this outside, but for lsif data it's easier to read when associated
+                        with the document *)
+                     List.iter single_definition_result ~f:(fun entry -> Format.printf "%s@." @@ print entry);
+                     single_definition_result)
+            in
+            if definitions <> [] then
+              let edges_entry = connect_ranges definitions document.id in
+              Format.printf "%s@." @@ print edges_entry;
+          end;
+      );
+  | _ ->
+    Format.eprintf "local_root(/Users/merlin/src) strip_prefix(/Users/.../) host(github.com) project(ocaml/merlin)"

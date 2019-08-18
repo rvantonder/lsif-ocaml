@@ -1,6 +1,6 @@
 (executables
  (modules main)
- (libraries core core_extended.base64 core.uuid ppx_deriving_yojson ppx_deriving_yojson.runtime hack_parallel) 
+ (libraries core core_extended.base64 core.uuid ppx_deriving_yojson ppx_deriving_yojson.runtime) 
  (preprocess (pps ppx_deriving_yojson ppx_let ppx_deriving.show))
  (names main))
 
@@ -10,4 +10,4 @@
 
 (install
  (section bin)
- (files (main.exe as main)))
+ (files (main.exe as ocaml-lsif)))

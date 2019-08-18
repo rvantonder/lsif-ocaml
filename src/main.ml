@@ -1,10 +1,9 @@
 open Core
+open Command.Let_syntax
 
 module Json = Yojson.Safe
 
 let debug = Option.is_some (Sys.getenv "DEBUG_OCAML_LSIF")
-let emit_type_hovers = true
-let emit_definitions = true
 
 let i : int ref = ref 1
 
@@ -19,32 +18,30 @@ module Export = struct
     { name : string
     ; version : string
     }
-  [@@deriving yojson]
+  [@@deriving to_yojson]
 
   type content =
     { language : string
     ; value : string
     }
-  [@@deriving yojson]
+  [@@deriving to_yojson]
 
   type hover =
     { contents : content list
     }
-  [@@deriving yojson]
+  [@@deriving to_yojson]
 
   type location =
     { line : int
     ; character : int
     }
-  [@@deriving yojson]
+  [@@deriving to_yojson]
 
   type result =
     | Hover of hover
 
   let result_to_yojson = function
     | Hover contents -> hover_to_yojson contents
-
-  let result_of_yojson _ = assert false
 
   type entry =
     { id : string
@@ -92,7 +89,7 @@ module Export = struct
     ; document : int option
           [@default None]
     }
-  [@@deriving yojson]
+  [@@deriving to_yojson]
 
   let default =
     { id = "-1"
@@ -222,7 +219,6 @@ let fold_directory root ~init ~f =
   in
   aux init root (-1)
 
-
 type hover_result_vertices =
   { result_set_vertex : Export.entry
   ; range_vertex : Export.entry
@@ -283,7 +279,11 @@ let to_lsif merlin_results : intermediate_result =
           match definition_info_of_yojson json with
           | Ok d -> Some (Definition d)
           | Error _ ->
-            if debug then Format.eprintf "Ignoring other json: %s@." @@ Json.pretty_to_string json;
+            if debug then
+              Format.eprintf
+                "Merlin response is not type or \
+                 definition info, ignoring it: %s@."
+              @@ Json.pretty_to_string json;
             None
       in
       let exported =
@@ -400,9 +400,161 @@ let print =
     Json.to_string
     Export.entry_to_yojson
 
-(* scheme:
-   file:///<host>/<project_root>/prefx-stripped-from-local-absolute-root
-*)
+let main host project_root local_absolute_root strip_prefix exclude_dir emit_type_hovers emit_definitions =
+  let paths = paths local_absolute_root in
+  let header = header host project_root in
+  let project = project () in
+  Format.printf "%s@." @@ print header;
+  Format.printf "%s@." @@ print project;
+  let results = List.map paths ~f:(fun filepath -> { filepath; result = process_filepath filepath }) in
+  (* Generate IDs and connect vertices sequentially. *)
+  let document_id_table = String.Table.create () in
+  List.iter results ~f:(fun { filepath = absolute_filepath; result = { hovers; definitions } } ->
+      let relative_filepath = String.chop_prefix_exn absolute_filepath ~prefix:strip_prefix in
+      let document = make_document host project_root relative_filepath absolute_filepath in
+      (* add document to table. Not needed for type hovers... only definitions *)
+      let document =
+        match String.Table.find document_id_table absolute_filepath with
+        | Some id -> { document with id = Int.to_string id }
+        | None ->
+          let id = Int.of_string (fresh ()) in
+          String.Table.add_exn document_id_table ~key:absolute_filepath ~data:id;
+          let document = { document with id = Int.to_string id } in
+          Format.printf "%s@." @@ print document;
+          let document_in_project_edge =
+            connect ~out_v:project.id ~in_vs:[document.id] ~label:"contains" ()
+          in
+          Format.printf "%s@." @@ print document_in_project_edge;
+          document
+      in
+      if emit_type_hovers then
+        begin
+          (* Reverse list for in-order printing *)
+          let hovers = List.rev hovers in
+          (* Emit type info *)
+          let hovers =
+            List.concat_map hovers ~f:(fun { result_set_vertex; range_vertex; type_info_vertex } ->
+                let result_set_vertex = { result_set_vertex with id = fresh () } in
+                let range_vertex = { range_vertex with id = fresh () } in
+                (* Connect range (outV) to resultSet (inV). *)
+                let result_set_edge =
+                  connect ~out_v:range_vertex.id ~in_v:result_set_vertex.id ~label:"next" ()
+                in
+                let type_info_vertex = { type_info_vertex with id = fresh () } in
+                (* Connect resultSet (outV) to hoverResult (inV). *)
+                let hover_edge =
+                  connect ~in_v:type_info_vertex.id ~out_v:result_set_vertex.id ~label:"textDocument/hover" ()
+                in
+                [result_set_vertex; range_vertex; result_set_edge; type_info_vertex; hover_edge]
+              )
+          in
+          if hovers <> [] then
+            begin
+              List.iter hovers ~f:(fun entry -> Format.printf "%s@." @@ print entry);
+              let edges_entry = connect_ranges hovers document.id in
+              Format.printf "%s@." @@ print edges_entry;
+            end
+        end;
+      (* Emit definitions *)
+      if emit_definitions then
+        begin
+          let definitions =
+            List.concat_map
+              definitions
+              ~f:(fun
+                   { declaration_result_set_vertex
+                   ; declaration_range_vertex
+                   ; reference_range_vertex
+                   ; definition_result_vertex
+                   ; destination_file } ->
+                   let declaration_result_set_vertex = { declaration_result_set_vertex with id = fresh () } in
+                   let declaration_range_vertex = { declaration_range_vertex with id = fresh () } in
+                   let reference_range_vertex = { reference_range_vertex with id = fresh () } in
+                   let definition_result_vertex = { definition_result_vertex with id = fresh () } in
+                   let declaration_result_set_to_declaration_range_edge =
+                     connect
+                       ~out_v:declaration_range_vertex.id
+                       ~in_v:declaration_result_set_vertex.id
+                       ~label:"next"
+                       ()
+                   in
+                   let declaration_result_set_to_reference_range_edge =
+                     connect
+                       ~out_v:reference_range_vertex.id
+                       ~in_v:declaration_result_set_vertex.id
+                       ~label:"next"
+                       ()
+                   in
+                   let definition_result_to_declaration_result_set_edge =
+                     connect
+                       ~out_v:declaration_result_set_vertex.id
+                       ~in_v:definition_result_vertex.id
+                       ~label:"textDocument/definition"
+                       ()
+                   in
+                   let definition_result_to_document_and_range =
+                     let destination_file =
+                       match destination_file with
+                       | "*buffer*" -> absolute_filepath
+                       | filepath -> filepath
+                     in
+                     let document =
+                       match String.Table.find document_id_table destination_file with
+                       | Some id ->
+                         (* Already printed the previous time this was added to the table *)
+                         { document with id = Int.to_string id }
+                       | None ->
+                         let relative_filepath =
+                           match String.chop_prefix destination_file ~prefix:strip_prefix with
+                           | Some relative_filepath_in_project_path ->
+                             relative_filepath_in_project_path
+                           | None ->
+                             destination_file (* somewhere else, probably .opam *)
+                         in
+                         let document = make_document host project_root relative_filepath absolute_filepath in
+                         let id = Int.of_string (fresh ()) in
+                         String.Table.add_exn document_id_table ~key:destination_file ~data:id;
+                         let document = { document with id = Int.to_string id } in
+                         Format.printf "%s@." @@ print document;
+                         let document_in_project_edge =
+                           connect ~out_v:project.id ~in_vs:[document.id] ~label:"contains" ()
+                         in
+                         Format.printf "%s@." @@ print document_in_project_edge;
+                         document
+                     in
+                     connect
+                       ~out_v:definition_result_vertex.id
+                       ~in_vs:[declaration_range_vertex.id]
+                       ~document:(Int.of_string document.id)
+                       ~label:"item"
+                       ()
+                   in
+                   let single_definition_result =
+                     [ declaration_result_set_vertex
+                     ; declaration_range_vertex
+                     ; declaration_result_set_to_declaration_range_edge
+                     ; reference_range_vertex
+                     ; declaration_result_set_to_reference_range_edge
+                     ; definition_result_vertex
+                     ; definition_result_to_declaration_result_set_edge
+                     ; definition_result_to_document_and_range
+                     ]
+                   in
+                   (* can do this outside, but for lsif data it's easier to read when associated
+                      with the document *)
+                   List.iter single_definition_result ~f:(fun entry -> Format.printf "%s@." @@ print entry);
+                   single_definition_result)
+          in
+          if definitions <> [] then
+            let edges_entry = connect_ranges definitions document.id in
+            Format.printf "%s@." @@ print edges_entry;
+        end;
+    );
+
+
+  (* scheme:
+     file:///<host>/<project_root>/prefx-stripped-from-local-absolute-root
+  *)
 type flags =
   { host : string (* e.g., github.com. *)
   ; project_root : string (* under the host, e.g., github.com/project/root *)
@@ -412,157 +564,50 @@ type flags =
   (* ; include_base64 : bool *)
   }
 
+let parameters : (unit -> 'result) Command.Param.t =
+  [%map_open
+    let host = flag "host" (optional_with_default "github.com" string) ~doc:"host The host for this project (default: github.com)"
+    and project_root = flag "exported-project-root" ~aliases:["export"; "e"] (optional string) ~doc:"project-root The project root on the host to export to (e.g., username/github-repo-name)"
+    and local_root = flag "local-project-root" (optional string) ~doc:"absolute-path An absolute path to the project directory or subdirectory containing lsif.in files to process"
+    and strip_prefix = flag "strip-prefix" ~aliases:["p"] (optional string) ~doc:"path-prefix The prefix to strip from the the local root path which should not be exported (e.g., /Users/my-username/)"
+    and exclude_directories = flag "exclude-dir" (optional (Arg_type.comma_separated string)) ~doc:"directories Directories to exclude from processing"
+    and emit_type_hovers = flag "only-type-hovers" no_arg ~doc:"only emit hover type information"
+    and emit_definitions = flag "only-definitions" no_arg ~doc:"only emit definition information"
+    in
+    fun () ->
+      let project_root =
+        match project_root with
+        | None -> failwith "this needs to be parsed with git"
+        | Some project_root -> project_root
+      in
+      let local_root =
+        match local_root with
+        | None -> Sys.getcwd ()
+        | Some root -> root
+      in
+      let strip_prefix =
+        match strip_prefix with
+        | None -> Sys.getcwd ()
+        | Some prefix -> prefix
+      in
+      let exclude_dir =
+        match exclude_directories with
+        | None | Some [] -> ["_build"]
+        | Some exclude -> ["_build"] @ exclude
+      in
+      let emit_type_hovers, emit_definitions =
+        match emit_type_hovers, emit_definitions with
+        | false, false -> true, true
+        | _ as t -> t
+      in
+      main host project_root local_root strip_prefix exclude_dir emit_type_hovers emit_definitions
+  ]
+
 let () =
-  match Sys.argv |> Array.to_list with
-  | _ :: local_absolute_root :: strip_prefix :: host :: project_root :: _ ->
-    let paths = paths local_absolute_root in
-    let header = header host project_root in
-    let project = project () in
-    Format.printf "%s@." @@ print header;
-    Format.printf "%s@." @@ print project;
-    let results = List.map paths ~f:(fun filepath -> { filepath; result = process_filepath filepath }) in
-    (* Generate IDs and connect vertices sequentially. *)
-    let document_id_table = String.Table.create () in
-    List.iter results ~f:(fun { filepath = absolute_filepath; result = { hovers; definitions } } ->
-        let relative_filepath = String.chop_prefix_exn absolute_filepath ~prefix:strip_prefix in
-        let document = make_document host project_root relative_filepath absolute_filepath in
-        (* add document to table. Not needed for type hovers... only definitions *)
-        let document =
-          match String.Table.find document_id_table absolute_filepath with
-          | Some id -> { document with id = Int.to_string id }
-          | None ->
-            let id = Int.of_string (fresh ()) in
-            String.Table.add_exn document_id_table ~key:absolute_filepath ~data:id;
-            let document = { document with id = Int.to_string id } in
-            Format.printf "%s@." @@ print document;
-            let document_in_project_edge =
-              connect ~out_v:project.id ~in_vs:[document.id] ~label:"contains" ()
-            in
-            Format.printf "%s@." @@ print document_in_project_edge;
-            document
-        in
-        if emit_type_hovers then
-          begin
-            (* Reverse list for in-order printing *)
-            let hovers = List.rev hovers in
-            (* Emit type info *)
-            let hovers =
-              List.concat_map hovers ~f:(fun { result_set_vertex; range_vertex; type_info_vertex } ->
-                  let result_set_vertex = { result_set_vertex with id = fresh () } in
-                  let range_vertex = { range_vertex with id = fresh () } in
-                  (* Connect range (outV) to resultSet (inV). *)
-                  let result_set_edge =
-                    connect ~out_v:range_vertex.id ~in_v:result_set_vertex.id ~label:"next" ()
-                  in
-                  let type_info_vertex = { type_info_vertex with id = fresh () } in
-                  (* Connect resultSet (outV) to hoverResult (inV). *)
-                  let hover_edge =
-                    connect ~in_v:type_info_vertex.id ~out_v:result_set_vertex.id ~label:"textDocument/hover" ()
-                  in
-                  [result_set_vertex; range_vertex; result_set_edge; type_info_vertex; hover_edge]
-                )
-            in
-            if hovers <> [] then
-              begin
-                List.iter hovers ~f:(fun entry -> Format.printf "%s@." @@ print entry);
-                let edges_entry = connect_ranges hovers document.id in
-                Format.printf "%s@." @@ print edges_entry;
-              end
-          end;
-        (* Emit definitions *)
-        if emit_definitions then
-          begin
-            let definitions =
-              List.concat_map
-                definitions
-                ~f:(fun
-                     { declaration_result_set_vertex
-                     ; declaration_range_vertex
-                     ; reference_range_vertex
-                     ; definition_result_vertex
-                     ; destination_file } ->
-                     let declaration_result_set_vertex = { declaration_result_set_vertex with id = fresh () } in
-                     let declaration_range_vertex = { declaration_range_vertex with id = fresh () } in
-                     let reference_range_vertex = { reference_range_vertex with id = fresh () } in
-                     let definition_result_vertex = { definition_result_vertex with id = fresh () } in
-                     let declaration_result_set_to_declaration_range_edge =
-                       connect
-                         ~out_v:declaration_range_vertex.id
-                         ~in_v:declaration_result_set_vertex.id
-                         ~label:"next"
-                         ()
-                     in
-                     let declaration_result_set_to_reference_range_edge =
-                       connect
-                         ~out_v:reference_range_vertex.id
-                         ~in_v:declaration_result_set_vertex.id
-                         ~label:"next"
-                         ()
-                     in
-                     let definition_result_to_declaration_result_set_edge =
-                       connect
-                         ~out_v:declaration_result_set_vertex.id
-                         ~in_v:definition_result_vertex.id
-                         ~label:"textDocument/definition"
-                         ()
-                     in
-                     let definition_result_to_document_and_range =
-                       let destination_file =
-                         match destination_file with
-                         | "*buffer*" -> absolute_filepath
-                         | filepath -> filepath
-                       in
-                       let document =
-                         match String.Table.find document_id_table destination_file with
-                         | Some id ->
-                           (* Already printed the previous time this was added to the table *)
-                           { document with id = Int.to_string id }
-                         | None ->
-                           let relative_filepath =
-                             match String.chop_prefix destination_file ~prefix:strip_prefix with
-                             | Some relative_filepath_in_project_path ->
-                               relative_filepath_in_project_path
-                             | None ->
-                               destination_file (* somewhere else, probably .opam *)
-                           in
-                           let document = make_document host project_root relative_filepath absolute_filepath in
-                           let id = Int.of_string (fresh ()) in
-                           String.Table.add_exn document_id_table ~key:destination_file ~data:id;
-                           let document = { document with id = Int.to_string id } in
-                           Format.printf "%s@." @@ print document;
-                           let document_in_project_edge =
-                             connect ~out_v:project.id ~in_vs:[document.id] ~label:"contains" ()
-                           in
-                           Format.printf "%s@." @@ print document_in_project_edge;
-                           document
-                       in
-                       connect
-                         ~out_v:definition_result_vertex.id
-                         ~in_vs:[declaration_range_vertex.id]
-                         ~document:(Int.of_string document.id)
-                         ~label:"item"
-                         ()
-                     in
-                     let single_definition_result =
-                       [ declaration_result_set_vertex
-                       ; declaration_range_vertex
-                       ; declaration_result_set_to_declaration_range_edge
-                       ; reference_range_vertex
-                       ; declaration_result_set_to_reference_range_edge
-                       ; definition_result_vertex
-                       ; definition_result_to_declaration_result_set_edge
-                       ; definition_result_to_document_and_range
-                       ]
-                     in
-                     (* can do this outside, but for lsif data it's easier to read when associated
-                        with the document *)
-                     List.iter single_definition_result ~f:(fun entry -> Format.printf "%s@." @@ print entry);
-                     single_definition_result)
-            in
-            if definitions <> [] then
-              let edges_entry = connect_ranges definitions document.id in
-              Format.printf "%s@." @@ print edges_entry;
-          end;
-      );
-  | _ ->
-    Format.eprintf "local_root(/Users/merlin/src) strip_prefix(/Users/.../) host(github.com) project(ocaml/merlin)"
+  Command.basic ~summary:"Output LSIF data. The file path scheme is\n \
+                          file:///<host>/<project_root>/project-directories, where, for example:\n \
+                          host is github.com\n \
+                          project-root is username/github-project\n \
+                          project-directories is computed from the -local-project-root after applying -strip-prefix
+                         " parameters
+  |> Command.run ~version:"0.1.0"

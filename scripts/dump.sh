@@ -3,7 +3,7 @@
 # set -ex
 set -e
 
-MERLIN_BINARY="Users/rvt/merlin/ocamlmerlin"
+MERLIN_BINARY="/Users/rvt/merlin/ocamlmerlin"
 
 EXCLUDE="_build\|test"
 

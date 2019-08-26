@@ -1,23 +1,13 @@
 #!/bin/bash
 
 set -ex
-# set -e
-
-TMP=${TMPDIR:-/tmp}
-OCAML_MERLIN_LSIF="ocaml-merlin-lsif-0.1.0"
+set -e
 
 if [ ! -f ocamlmerlin-with-lsif ]; then
-    echo "LSIF support is not installed. Try opam pin https://github.com/rvantonder/merlin-lsif"
-    install_merlin_with_lsif
-    if [ $? -eq 0 ]; then
-        echo "Installed LSIF support"
-    else
-        echo "Failed to install LSIF support. Please see manual install instructions at \
-              https://github.com/rvantonder/merlin \
-              and merlin in a "merlin" subdirectory in this folder."
-    fi  
+    echo "LSIF support is not installed. Try 'opam pin add merlin-lsif https://github.com/rvantonder/merlin.git\#dumper-lite'"
+    exit 1
 else  
-    MERLIN_BINARY=ocamlmerlin-with-lsif
+    MERLIN_LSIF_BINARY=ocamlmerlin-with-lsif
 fi
 
 EXCLUDE="_build\|test"
@@ -31,7 +21,7 @@ for f in $FILES; do
   if [[ -f "$FILE_DIR/.merlin" ]]; then
     ((i++))
     printf "(%4d/%4d) %s\n" "$i" "$N_FILES" "$f"
-    cat "$f" | $MERLIN_BINARY server lsif "$f" "-dot-merlin" "$FILE_DIR/.merlin" > "$f.lsif.in" # &
+    cat "$f" | $MERLIN_LSIF_BINARY server lsif "$f" "-dot-merlin" "$FILE_DIR/.merlin" > "$f.lsif.in" # &
   fi
 done
 

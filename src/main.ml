@@ -329,11 +329,14 @@ let to_lsif merlin_results : intermediate_result =
       | Some (`Definition result) -> { acc with definitions = result::acc.definitions }
       | None -> acc)
 
-let process_filepath filename =
+let process_filepath filename : intermediate_result option =
   if debug then Format.printf "File: %s@." filename;
-  In_channel.read_all (filename ^ ".lsif.in")
-  |> String.split_lines
-  |> to_lsif
+  try
+    In_channel.read_all (filename ^ ".lsif.in")
+    |> String.split_lines
+    |> to_lsif
+    |> Option.some
+  with _ -> None
 
 let header host root =
   { Export.default with
@@ -406,7 +409,10 @@ let main host project_root local_absolute_root strip_prefix exclude_dir emit_typ
   let project = project () in
   Format.printf "%s@." @@ print header;
   Format.printf "%s@." @@ print project;
-  let results = List.map paths ~f:(fun filepath -> { filepath; result = process_filepath filepath }) in
+  let results = List.filter_map paths ~f:(fun filepath ->
+      match process_filepath filepath with
+      | Some result -> Some { filepath; result }
+      | None -> None) in
   (* Generate IDs and connect vertices sequentially. *)
   let document_id_table = String.Table.create () in
   List.iter results ~f:(fun { filepath = absolute_filepath; result = { hovers; definitions } } ->

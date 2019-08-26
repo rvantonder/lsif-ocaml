@@ -1,9 +1,10 @@
 #!/bin/bash
 
-set -ex
 set -e
 
-if [ ! -f ocamlmerlin-with-lsif ]; then
+EXISTS=$(command -v ocamlmerlin-with-lsif || echo)
+
+if [ ! -n "$EXISTS" ]; then
     echo "LSIF support is not installed. Try 'opam pin add merlin-lsif https://github.com/rvantonder/merlin.git\#dumper-lite'"
     exit 1
 else  

@@ -569,8 +569,16 @@ let parameters : (unit -> 'result) Command.Param.t =
     fun () ->
       let project_root =
         match project_root with
-        | None -> failwith "this needs to be parsed with git"
         | Some project_root -> project_root
+        | None ->
+          try
+            Unix.open_process_in "git config --get remote.origin.url"
+            |> In_channel.input_all
+            |> String.substr_replace_all ~pattern:"https://github.com/" ~with_:""
+            |> String.substr_replace_all ~pattern:".git" ~with_:""
+          with _ ->
+            Format.eprintf "Name the project root, like '-e user/project', where user/project is the part coming from github.com/user/project.";
+            exit 1
       in
       let local_root =
         match local_root with

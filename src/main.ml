@@ -403,7 +403,7 @@ let print =
     Json.to_string
     Export.entry_to_yojson
 
-let main host project_root local_absolute_root strip_prefix exclude_dir emit_type_hovers emit_definitions =
+let main host project_root local_absolute_root strip_prefix emit_type_hovers emit_definitions =
   let paths = paths local_absolute_root in
   let header = header host project_root in
   let project = project () in
@@ -555,20 +555,7 @@ let main host project_root local_absolute_root strip_prefix exclude_dir emit_typ
             let edges_entry = connect_ranges definitions document.id in
             Format.printf "%s@." @@ print edges_entry;
         end;
-    );
-
-
-  (* scheme:
-     file:///<host>/<project_root>/prefx-stripped-from-local-absolute-root
-  *)
-type flags =
-  { host : string (* e.g., github.com. *)
-  ; project_root : string (* under the host, e.g., github.com/project/root *)
-  ; local_absolute_root : string (* absolute path of local root or file to index *)
-  ; strip_prefix : string (* the prefix to strip from the absolute root *)
-  (* ; type_info_only : bool *)
-  (* ; include_base64 : bool *)
-  }
+    )
 
 let parameters : (unit -> 'result) Command.Param.t =
   [%map_open
@@ -576,7 +563,6 @@ let parameters : (unit -> 'result) Command.Param.t =
     and project_root = flag "exported-project-root" ~aliases:["export"; "e"] (optional string) ~doc:"project-root The project root on the host to export to (e.g., username/github-repo-name)"
     and local_root = flag "local-project-root" (optional string) ~doc:"absolute-path An absolute path to the project directory or subdirectory containing lsif.in files to process"
     and strip_prefix = flag "strip-prefix" ~aliases:["p"] (optional string) ~doc:"path-prefix The prefix to strip from the the local root path which should not be exported (e.g., /Users/my-username/)"
-    and exclude_directories = flag "exclude-dir" (optional (Arg_type.comma_separated string)) ~doc:"directories Directories to exclude from processing"
     and emit_type_hovers = flag "only-type-hovers" no_arg ~doc:"only emit hover type information"
     and emit_definitions = flag "only-definitions" no_arg ~doc:"only emit definition information"
     in
@@ -596,17 +582,12 @@ let parameters : (unit -> 'result) Command.Param.t =
         | None -> Sys.getcwd ()
         | Some prefix -> prefix
       in
-      let exclude_dir =
-        match exclude_directories with
-        | None | Some [] -> ["_build"]
-        | Some exclude -> ["_build"] @ exclude
-      in
       let emit_type_hovers, emit_definitions =
         match emit_type_hovers, emit_definitions with
         | false, false -> true, true
         | _ as t -> t
       in
-      main host project_root local_root strip_prefix exclude_dir emit_type_hovers emit_definitions
+      main host project_root local_root strip_prefix emit_type_hovers emit_definitions
   ]
 
 let () =

@@ -1,9 +1,24 @@
 #!/bin/bash
 
-# set -ex
-set -e
+set -ex
+# set -e
 
-MERLIN_BINARY="/Users/rvt/merlin/ocamlmerlin"
+TMP=${TMPDIR:-/tmp}
+OCAML_MERLIN_LSIF="ocaml-merlin-lsif-0.1.0"
+
+if [ ! -f ocamlmerlin-with-lsif ]; then
+    echo "LSIF support is not installed. Try opam pin https://github.com/rvantonder/merlin-lsif"
+    install_merlin_with_lsif
+    if [ $? -eq 0 ]; then
+        echo "Installed LSIF support"
+    else
+        echo "Failed to install LSIF support. Please see manual install instructions at \
+              https://github.com/rvantonder/merlin \
+              and merlin in a "merlin" subdirectory in this folder."
+    fi  
+else  
+    MERLIN_BINARY=ocamlmerlin-with-lsif
+fi
 
 EXCLUDE="_build\|test"
 

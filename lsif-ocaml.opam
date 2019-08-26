@@ -1,11 +1,12 @@
 opam-version: "2.0"
-version: "0.1.0"
-maintainer: "rvantonder@gmail.com"
-authors: "Rijnard van Tonder"
-homepage: "https://github.com/rvantonder/ocaml-lsif"
-bug-reports: "https://github.com/rvantonder/ocaml-lsif/issues"
-dev-repo: "https://github.com/rvantonder/ocaml-lsif.git"
-license: "MIT"
+name:         "lsif-ocaml"
+version:      "0.1.0"
+maintainer:   "rvantonder@gmail.com"
+authors:      "Rijnard van Tonder"
+homepage:     "https://github.com/rvantonder/ocaml-lsif"
+bug-reports:  "https://github.com/rvantonder/ocaml-lsif/issues"
+dev-repo:     "https://github.com/rvantonder/ocaml-lsif.git"
+license:      "MIT"
 build: [["dune" "build" "-p" name "-j" jobs "@install"]]
 build-test: [["dune" "runtest" "-p" name "-j" jobs]]
 depends: [
@@ -14,3 +15,5 @@ depends: [
   "ppx_deriving"
   "ppx_deriving_yojson"
 ]
+synopsis:
+  "Takes merlin LSIF data and emits it in LSIF format"

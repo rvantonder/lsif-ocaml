@@ -1,0 +1,8 @@
+(alias
+  (name DEFAULT)
+  (deps dump.sh upload.sh))
+
+(install
+ (package lsif-ocaml)
+ (section bin)
+ (files (dump.sh as lsif-ocaml-dump) (upload.sh as lsif-ocaml-upload)))

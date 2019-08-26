@@ -9,5 +9,6 @@
  (deps main.exe))
 
 (install
+ (package lsif-ocaml)
  (section bin)
  (files (main.exe as lsif-ocaml)))

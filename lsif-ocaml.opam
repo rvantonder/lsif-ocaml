@@ -1,5 +1,5 @@
 opam-version: "2.0"
-version: "ocaml-lsif"
+version: "0.1.0"
 maintainer: "rvantonder@gmail.com"
 authors: "Rijnard van Tonder"
 homepage: "https://github.com/rvantonder/ocaml-lsif"

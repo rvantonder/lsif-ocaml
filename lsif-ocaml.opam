@@ -3,9 +3,9 @@ name:         "lsif-ocaml"
 version:      "0.1.0"
 maintainer:   "rvantonder@gmail.com"
 authors:      "Rijnard van Tonder"
-homepage:     "https://github.com/rvantonder/ocaml-lsif"
-bug-reports:  "https://github.com/rvantonder/ocaml-lsif/issues"
-dev-repo:     "https://github.com/rvantonder/ocaml-lsif.git"
+homepage:     "https://github.com/rvantonder/lsif-ocaml"
+bug-reports:  "https://github.com/rvantonder/lsif-ocaml/issues"
+dev-repo:     "https://github.com/rvantonder/lsif-ocaml.git"
 license:      "MIT"
 build: [["dune" "build" "-p" name "-j" jobs "@install"]]
 build-test: [["dune" "runtest" "-p" name "-j" jobs]]

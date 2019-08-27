@@ -281,7 +281,7 @@ let to_lsif merlin_results : intermediate_result =
           | Error _ ->
             if debug then
               Format.eprintf
-                "Merlin response is not type or \
+                "Merlin response is not type info or \
                  definition info, ignoring it: %s@."
               @@ Json.pretty_to_string json;
             None
@@ -294,26 +294,13 @@ let to_lsif merlin_results : intermediate_result =
           let type_info_vertex = Vertex.hover_result type_ in
           return (`Hover { result_set_vertex; range_vertex; type_info_vertex })
         | Definition { start; end_; definition = { file; pos } } ->
-          (* Create a resultSet vertex for the range where this definition is *)
+          (* Create a resultSet vertex for the range where this definition is. *)
           let declaration_result_set_vertex = Vertex.result_set () in
-          (* Create the vertex range for it *)
+          (* Create the vertex range for it. *)
           let declaration_range_vertex = Vertex.range (pos.line - 1) (pos.col - 1) (pos.line - 1) (pos.col - 1) in
-          (* Create an edge with 'next' to connect resultSet and declaration range above. *)
-
-          (* Create a range vertex for the reference range *)
-          (*
-          if end_.col = -1 then
-            (* this happens when "not in environment type" *)
-            failwith (Format.sprintf "end_.col is -1 for merlin result: %s" merlin_result);
-*)
           let reference_range_vertex = Vertex.range (start.line - 1) start.col (end_.line - 1) end_.col in
-          (* Create a 'next' edge to the result_set above *)
-
           (* Create a definitionResult vertex *)
           let definition_result_vertex = Vertex.definition_result () in
-          (* Connect the definitionResult above to the resultset with textDocument/definition edge *)
-
-          (* Add "item" edge to connect the definitionResult vertex to the range for a particular document (id) *)
           let destination_file = file in
           return
             (`Definition
@@ -358,16 +345,11 @@ let project () =
   }
 
 let make_document host project_root relative_filepath absolute_filepath =
-  let _contents_base64 =
-    In_channel.read_all absolute_filepath
-    |> Base64.Websafe.encode
-  in
   { Export.default with
     entry_type = "vertex"
   ; label = "document"
   ; uri = Some ("file:///"^host^/project_root^/relative_filepath)
   ; language_id = Some "OCaml"
-  (* FIXME *)
   ; contents = None
   }
 
@@ -381,14 +363,14 @@ let connect_ranges results document_id =
 
 let paths root =
   let f acc ~depth:_ ~absolute_path ~is_file =
-    let is_ml_or_re_file =
+    let is_ml_file =
       if is_file then
-        [".ml"; ".mli" (*; ".re"; ".rei" *) ]
+        [".ml"; ".mli" ]
         |> List.exists ~f:(fun suffix -> String.is_suffix ~suffix absolute_path)
       else
         false
     in
-    if is_ml_or_re_file then
+    if is_ml_file then
       Continue (absolute_path::acc)
     else if Filename.basename absolute_path = "_build" then
       (* Don't descend into the _build directory. *)
@@ -413,12 +395,10 @@ let main host project_root local_absolute_root strip_prefix emit_type_hovers emi
       match process_filepath filepath with
       | Some result -> Some { filepath; result }
       | None -> None) in
-  (* Generate IDs and connect vertices sequentially. *)
   let document_id_table = String.Table.create () in
   List.iter results ~f:(fun { filepath = absolute_filepath; result = { hovers; definitions } } ->
       let relative_filepath = String.chop_prefix_exn absolute_filepath ~prefix:strip_prefix in
       let document = make_document host project_root relative_filepath absolute_filepath in
-      (* add document to table. Not needed for type hovers... only definitions *)
       let document =
         match String.Table.find document_id_table absolute_filepath with
         | Some id -> { document with id = Int.to_string id }
@@ -435,9 +415,8 @@ let main host project_root local_absolute_root strip_prefix emit_type_hovers emi
       in
       if emit_type_hovers then
         begin
-          (* Reverse list for in-order printing *)
+          (* Reverse list for in-order printing. *)
           let hovers = List.rev hovers in
-          (* Emit type info *)
           let hovers =
             List.concat_map hovers ~f:(fun { result_set_vertex; range_vertex; type_info_vertex } ->
                 let result_set_vertex = { result_set_vertex with id = fresh () } in
@@ -449,10 +428,9 @@ let main host project_root local_absolute_root strip_prefix emit_type_hovers emi
                 let type_info_vertex = { type_info_vertex with id = fresh () } in
                 (* Connect resultSet (outV) to hoverResult (inV). *)
                 let hover_edge =
-                  connect ~in_v:type_info_vertex.id ~out_v:result_set_vertex.id ~label:"textDocument/hover" ()
+                  connect ~out_v:result_set_vertex.id ~in_v:type_info_vertex.id ~label:"textDocument/hover" ()
                 in
-                [result_set_vertex; range_vertex; result_set_edge; type_info_vertex; hover_edge]
-              )
+                [result_set_vertex; range_vertex; result_set_edge; type_info_vertex; hover_edge])
           in
           if hovers <> [] then
             begin
@@ -461,7 +439,6 @@ let main host project_root local_absolute_root strip_prefix emit_type_hovers emi
               Format.printf "%s@." @@ print edges_entry;
             end
         end;
-      (* Emit definitions *)
       if emit_definitions then
         begin
           let definitions =
@@ -477,6 +454,7 @@ let main host project_root local_absolute_root strip_prefix emit_type_hovers emi
                    let declaration_range_vertex = { declaration_range_vertex with id = fresh () } in
                    let reference_range_vertex = { reference_range_vertex with id = fresh () } in
                    let definition_result_vertex = { definition_result_vertex with id = fresh () } in
+                   (* Create an edge with 'next' to connect resultSet and declaration range above. *)
                    let declaration_result_set_to_declaration_range_edge =
                      connect
                        ~out_v:declaration_range_vertex.id
@@ -484,6 +462,7 @@ let main host project_root local_absolute_root strip_prefix emit_type_hovers emi
                        ~label:"next"
                        ()
                    in
+                   (* Create a range vertex for the reference range. *)
                    let declaration_result_set_to_reference_range_edge =
                      connect
                        ~out_v:reference_range_vertex.id
@@ -491,6 +470,7 @@ let main host project_root local_absolute_root strip_prefix emit_type_hovers emi
                        ~label:"next"
                        ()
                    in
+                   (* Connect the definitionResult above to the resultset with textDocument/definition edge. *)
                    let definition_result_to_declaration_result_set_edge =
                      connect
                        ~out_v:declaration_result_set_vertex.id
@@ -507,7 +487,7 @@ let main host project_root local_absolute_root strip_prefix emit_type_hovers emi
                      let document =
                        match String.Table.find document_id_table destination_file with
                        | Some id ->
-                         (* Already printed the previous time this was added to the table *)
+                         (* Case where this was already printed the previous time we added to the table. *)
                          { document with id = Int.to_string id }
                        | None ->
                          let relative_filepath =
@@ -515,7 +495,8 @@ let main host project_root local_absolute_root strip_prefix emit_type_hovers emi
                            | Some relative_filepath_in_project_path ->
                              relative_filepath_in_project_path
                            | None ->
-                             destination_file (* somewhere else, probably .opam *)
+                             (* A different path, probably in .opam for external libraries. *)
+                             destination_file
                          in
                          let document = make_document host project_root relative_filepath absolute_filepath in
                          let id = Int.of_string (fresh ()) in
@@ -528,6 +509,7 @@ let main host project_root local_absolute_root strip_prefix emit_type_hovers emi
                          Format.printf "%s@." @@ print document_in_project_edge;
                          document
                      in
+                     (* Add "item" edge to connect the definitionResult vertex to the range for a particular document (id). *)
                      connect
                        ~out_v:definition_result_vertex.id
                        ~in_vs:[declaration_range_vertex.id]

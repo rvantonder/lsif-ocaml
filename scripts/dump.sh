@@ -3,7 +3,7 @@
 set -e
 
 function ctrl_c() {
-        rm pkill -9 merlin
+        pkill -9 merlin
         exit 1
 }
 

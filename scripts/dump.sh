@@ -43,5 +43,6 @@ for f in $FILES; do
 done
 
 if [ ! -z "$PARALLEL_FRENZY" ]; then 
+    echo "Waiting for parallel processes to finish..."
     wait
 fi

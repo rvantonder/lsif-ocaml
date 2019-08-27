@@ -2,6 +2,13 @@
 
 set -e
 
+function ctrl_c() {
+        rm pkill -9 merlin
+        exit 1
+}
+
+trap ctrl_c INT
+
 PARALLEL_FRENZY=$1
 
 EXISTS=$(command -v ocamlmerlin-with-lsif || echo)

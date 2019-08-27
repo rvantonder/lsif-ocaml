@@ -38,7 +38,7 @@ for f in $FILES; do
     fi
   else
     ((i++))
-    printf "(%4d/%4d) %s\n" "$i" "$N_FILES" "$f" "(skipped, no .merlin)"
+    printf "(%4d/%4d) %s (skipped, no .merlin)\n" "$i" "$N_FILES" "$f"
   fi
 done
 

@@ -361,7 +361,7 @@ let connect_ranges results document_id =
   in
   connect ~out_v:document_id ~in_vs ~label:"contains" ()
 
-let paths root =
+let paths root exclude_directories subdirectories =
   let f acc ~depth:_ ~absolute_path ~is_file =
     let is_ml_file =
       if is_file then
@@ -372,8 +372,11 @@ let paths root =
     in
     if is_ml_file then
       Continue (absolute_path::acc)
-    else if Filename.basename absolute_path = "_build" then
-      (* Don't descend into the _build directory. *)
+      (* Don't descend into excluded directories, like _build. *)
+    else if List.exists exclude_directories ~f:((=) (Filename.basename absolute_path)) then
+      Skip acc
+      (* Don't descend if not included in the the allowable subdirectories. *)
+    else if not (List.exists subdirectories ~f:((=) (Filename.basename absolute_path))) then
       Skip acc
     else
       Continue acc
@@ -385,8 +388,8 @@ let print =
     Json.to_string
     Export.entry_to_yojson
 
-let main host project_root local_absolute_root strip_prefix emit_type_hovers emit_definitions =
-  let paths = paths local_absolute_root in
+let main host project_root exclude_directories subdirectories local_absolute_root strip_prefix emit_type_hovers emit_definitions =
+  let paths = paths local_absolute_root exclude_directories subdirectories in
   let header = header host project_root in
   let project = project () in
   Format.printf "%s@." @@ print header;
@@ -541,8 +544,8 @@ let parameters : (unit -> 'result) Command.Param.t =
   [%map_open
     let host = flag "host" (optional_with_default "github.com" string) ~doc:"host The host for this project (default: github.com)"
     and project_root = flag "exported-project-root" ~aliases:["export"; "e"] (optional string) ~doc:"project-root The project root on the host to export to (e.g., username/github-repo-name)"
-    and local_root = flag "local-project-root" (optional string) ~doc:"absolute-path An absolute path to the project directory or subdirectory containing lsif.in files to process"
-    and strip_prefix = flag "strip-prefix" ~aliases:["p"] (optional string) ~doc:"path-prefix The prefix to strip from the the local root path which should not be exported (e.g., /Users/my-username/)"
+    and subdirectories = flag "subdirectories" ~aliases:["d"; "dir"; "subdir"] (optional_with_default [] (Arg_type.comma_separated string)) ~doc:"dir1,dir2,... Process only these comma-separated subdirectories"
+    and exclude_directories = flag "exclude" (optional_with_default ["_build"] (Arg_type.comma_separated string)) ~doc:"dir1,dir2,... Exclude these directories (_build is ignored by default)"
     and emit_type_hovers = flag "only-type-hovers" no_arg ~doc:"only emit hover type information"
     and emit_definitions = flag "only-definitions" no_arg ~doc:"only emit definition information"
     in
@@ -560,22 +563,14 @@ let parameters : (unit -> 'result) Command.Param.t =
             Format.eprintf "Name the project root, like '-e user/project', where user/project is the part coming from github.com/user/project.";
             exit 1
       in
-      let local_root =
-        match local_root with
-        | None -> Sys.getcwd ()
-        | Some root -> root
-      in
-      let strip_prefix =
-        match strip_prefix with
-        | None -> Sys.getcwd ()
-        | Some prefix -> prefix
-      in
+      let local_root = Sys.getcwd () in
+      let strip_prefix = Sys.getcwd () in
       let emit_type_hovers, emit_definitions =
         match emit_type_hovers, emit_definitions with
         | false, false -> true, true
         | _ as t -> t
       in
-      main host project_root local_root strip_prefix emit_type_hovers emit_definitions
+      main host project_root exclude_directories subdirectories local_root strip_prefix emit_type_hovers emit_definitions
   ]
 
 let () =

@@ -546,8 +546,6 @@ let main host project_root local_absolute_root strip_prefix emit_type_hovers emi
                      ; definition_result_to_document_and_range
                      ]
                    in
-                   (* can do this outside, but for lsif data it's easier to read when associated
-                      with the document *)
                    List.iter single_definition_result ~f:(fun entry -> Format.printf "%s@." @@ print entry);
                    single_definition_result)
           in
@@ -599,10 +597,12 @@ let parameters : (unit -> 'result) Command.Param.t =
   ]
 
 let () =
-  Command.basic ~summary:"Output LSIF data. The file path scheme is\n \
-                          file:///<host>/<project_root>/project-directories, where, for example:\n \
-                          host is github.com\n \
-                          project-root is username/github-project\n \
-                          project-directories is computed from the -local-project-root after applying -strip-prefix
-                         " parameters
+  Command.basic
+    parameters
+    ~summary:
+      "Output LSIF data. The file path scheme is\n \
+       file:///<host>/<project_root>/project-directories, where, for example:\n \
+       host is github.com\n \
+       project-root is username/github-project\n \
+       project-directories is computed from the -local-project-root after applying -strip-prefix"
   |> Command.run ~version:"0.1.0"

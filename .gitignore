@@ -2,5 +2,6 @@ _build
 *.install
 **/.merlin
 *.exe
+*.lsif.in
 
 lsif-ocaml

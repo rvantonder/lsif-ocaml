@@ -2,6 +2,8 @@
 
 set -e
 
+PARALLEL_FRENZY=$1
+
 EXISTS=$(command -v ocamlmerlin-with-lsif || echo)
 
 if [ ! -n "$EXISTS" ]; then
@@ -22,8 +24,14 @@ for f in $FILES; do
   if [[ -f "$FILE_DIR/.merlin" ]]; then
     ((i++))
     printf "(%4d/%4d) %s\n" "$i" "$N_FILES" "$f"
-    cat "$f" | $MERLIN_LSIF_BINARY server lsif "$f" "-dot-merlin" "$FILE_DIR/.merlin" > "$f.lsif.in" # &
+    if [ -z "$PARALLEL_FRENZY" ]; then
+      cat "$f" | $MERLIN_LSIF_BINARY server lsif "$f" "-dot-merlin" "$FILE_DIR/.merlin" > "$f.lsif.in" # &
+    else
+      cat "$f" | $MERLIN_LSIF_BINARY server lsif "$f" "-dot-merlin" "$FILE_DIR/.merlin" > "$f.lsif.in"
+    fi
   fi
 done
 
-# wait
+if [-z "$PARALLEL_FRENZY" ]; then 
+    wait
+fi

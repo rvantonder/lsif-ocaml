@@ -361,7 +361,7 @@ let connect_ranges results document_id =
   in
   connect ~out_v:document_id ~in_vs ~label:"contains" ()
 
-let paths root exclude_directories subdirectories =
+let paths root exclude_directories =
   let f acc ~depth:_ ~absolute_path ~is_file =
     let is_ml_file =
       if is_file then
@@ -375,9 +375,6 @@ let paths root exclude_directories subdirectories =
       (* Don't descend into excluded directories, like _build. *)
     else if List.exists exclude_directories ~f:((=) (Filename.basename absolute_path)) then
       Skip acc
-      (* Don't descend if not included in the the allowable subdirectories. *)
-    else if not (List.exists subdirectories ~f:((=) (Filename.basename absolute_path))) then
-      Skip acc
     else
       Continue acc
   in
@@ -388,8 +385,8 @@ let print =
     Json.to_string
     Export.entry_to_yojson
 
-let main host project_root exclude_directories subdirectories local_absolute_root strip_prefix emit_type_hovers emit_definitions =
-  let paths = paths local_absolute_root exclude_directories subdirectories in
+let main host project_root exclude_directories local_absolute_root strip_prefix emit_type_hovers emit_definitions =
+  let paths = paths local_absolute_root exclude_directories in
   let header = header host project_root in
   let project = project () in
   Format.printf "%s@." @@ print header;
@@ -544,8 +541,7 @@ let parameters : (unit -> 'result) Command.Param.t =
   [%map_open
     let host = flag "host" (optional_with_default "github.com" string) ~doc:"host The host for this project (default: github.com)"
     and project_root = flag "exported-project-root" ~aliases:["export"; "e"] (optional string) ~doc:"project-root The project root on the host to export to (e.g., username/github-repo-name)"
-    and subdirectories = flag "subdirectories" ~aliases:["d"; "dir"; "subdir"] (optional_with_default [] (Arg_type.comma_separated string)) ~doc:"dir1,dir2,... Process only these comma-separated subdirectories"
-    and exclude_directories = flag "exclude" (optional_with_default ["_build"] (Arg_type.comma_separated string)) ~doc:"dir1,dir2,... Exclude these directories (_build is ignored by default)"
+    and exclude_directories = flag "exclude" (optional_with_default ["_build"] (Arg_type.comma_separated string)) ~doc:"dir1,dir2/dir3,... Exclude these directories (_build is ignored by default)"
     and emit_type_hovers = flag "only-type-hovers" no_arg ~doc:"only emit hover type information"
     and emit_definitions = flag "only-definitions" no_arg ~doc:"only emit definition information"
     in
@@ -570,7 +566,7 @@ let parameters : (unit -> 'result) Command.Param.t =
         | false, false -> true, true
         | _ as t -> t
       in
-      main host project_root exclude_directories subdirectories local_root strip_prefix emit_type_hovers emit_definitions
+      main host project_root exclude_directories local_root strip_prefix emit_type_hovers emit_definitions
   ]
 
 let () =

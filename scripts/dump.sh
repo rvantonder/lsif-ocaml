@@ -34,7 +34,7 @@ for f in $FILES; do
     if [ -z "$PARALLEL_FRENZY" ]; then
       cat "$f" | $MERLIN_LSIF_BINARY server lsif "$f" "-dot-merlin" "$FILE_DIR/.merlin" > "$f.lsif.in" # &
     else
-      cat "$f" | $MERLIN_LSIF_BINARY server lsif "$f" "-dot-merlin" "$FILE_DIR/.merlin" > "$f.lsif.in" &
+      cat "$f" | $MERLIN_LSIF_BINARY server lsif "$f" "-dot-merlin" "$FILE_DIR/.merlin" > "$f.lsif.in" 2> /dev/null &
     fi
   fi
 done

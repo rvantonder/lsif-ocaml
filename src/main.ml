@@ -534,14 +534,13 @@ let main host project_root exclude_directories local_absolute_root strip_prefix 
           if definitions <> [] then
             let edges_entry = connect_ranges definitions document.id in
             Format.printf "%s@." @@ print edges_entry;
-        end;
-    )
+        end)
 
 let parameters : (unit -> 'result) Command.Param.t =
   [%map_open
     let host = flag "host" (optional_with_default "github.com" string) ~doc:"host The host for this project (default: github.com)"
     and project_root = flag "exported-project-root" ~aliases:["export"; "e"] (optional string) ~doc:"project-root The project root on the host to export to (e.g., username/github-repo-name)"
-    and exclude_directories = flag "exclude" (optional_with_default ["_build"] (Arg_type.comma_separated string)) ~doc:"dir1,dir2/dir3,... Exclude these directories (_build is ignored by default)"
+    and exclude_directories = flag "exclude" (optional_with_default ["_build"; "test"] (Arg_type.comma_separated string)) ~doc:"dir1,dir2,... Exclude these directories ('_build' and 'test' is ignored by default)"
     and emit_type_hovers = flag "only-type-hovers" no_arg ~doc:"only emit hover type information"
     and emit_definitions = flag "only-definitions" no_arg ~doc:"only emit definition information"
     in
@@ -555,6 +554,7 @@ let parameters : (unit -> 'result) Command.Param.t =
             |> In_channel.input_all
             |> String.substr_replace_all ~pattern:"https://github.com/" ~with_:""
             |> String.substr_replace_all ~pattern:".git" ~with_:""
+            |> String.strip
           with _ ->
             Format.eprintf "Name the project root, like '-e user/project', where user/project is the part coming from github.com/user/project.";
             exit 1

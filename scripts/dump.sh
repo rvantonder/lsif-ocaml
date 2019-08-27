@@ -39,6 +39,6 @@ for f in $FILES; do
   fi
 done
 
-if [ -z "$PARALLEL_FRENZY" ]; then 
+if [ ! -z "$PARALLEL_FRENZY" ]; then 
     wait
 fi

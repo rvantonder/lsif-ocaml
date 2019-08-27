@@ -7,14 +7,14 @@ urlencode() {
 file="$1"
 
 usage() {
-    echo "Sourcegraph LSIF uploader usage:"
+    echo "Usage: upload LSIF data to Sourcegraph:"
     echo ""
     echo "env \\"
-    echo "  SRC_ENDPOINT=<https://sourcegraph.example.com> \\"
+    echo "  SRC_ENDPOINT=<https://sourcegraph.com> \\"
     echo "  SRC_LSIF_UPLOAD_TOKEN=<secret> \\"
     echo "  REPOSITORY=<github.com/you/your-repo> \\"
     echo "  COMMIT=<40-char-hash> \\"
-    echo "  bash upload-lsif.sh <file.lsif>"
+    echo "  lsif-ocaml-upload <file.lsif>"
 }
 
 if [[ -z "$SRC_LSIF_UPLOAD_TOKEN" || -z "$REPOSITORY" || -z "$COMMIT" || -z "$file" ]]; then

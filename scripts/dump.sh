@@ -36,6 +36,9 @@ for f in $FILES; do
     else
       cat "$f" | $MERLIN_LSIF_BINARY server lsif "$f" "-dot-merlin" "$FILE_DIR/.merlin" > "$f.lsif.in" 2> /dev/null &
     fi
+  else
+    ((i++))
+    printf "(%4d/%4d) %s\n" "$i" "$N_FILES" "$f" "(skipped, no .merlin)"
   fi
 done
 

@@ -574,8 +574,8 @@ let () =
     parameters
     ~summary:
       "Output LSIF data. The file path scheme is\n \
-       file:///<host>/<project_root>/project-directories, where, for example:\n \
+       file:///<host>/<project_root>/directories, where, for example:\n \
        host is github.com\n \
        project-root is username/github-project\n \
-       project-directories is computed from the -local-project-root after applying -strip-prefix"
+       directories is computed from the root of where this command is run."
   |> Command.run ~version:"0.1.0"

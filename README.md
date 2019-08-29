@@ -1,7 +1,9 @@
 # Language Server Index Format for OCaml
 
-Surface OCaml type hovers and jump-to-definitions using LSIF (in your browser).
+**Surface OCaml type hovers and jump-to-definitions using LSIF (in your browser).**
 
+<img src="https://user-images.githubusercontent.com/888624/63965007-4d11d500-ca66-11e9-8db5-4d943e8400b0.gif" width="600">
+<img src="https://user-images.githubusercontent.com/888624/63966981-703e8380-ca6a-11e9-8c21-ddc37bec44eb.gif" width="600">
 
 > What is LSIF?
 
@@ -9,13 +11,17 @@ Surface OCaml type hovers and jump-to-definitions using LSIF (in your browser).
 
 Note: development is early work-in-progress; the tool is released in the interest of early adopters who may find it immediately useful for open source projects.
 
-## Example
+## Examples
 
-Try hovering on files in the `stdlib` folder for OCaml 4.08: 
+The following forks have been indexed, try it out:
 
-- In Sourcegraph: 
+- The `stdlib` folder for OCaml 4.08:
+    - [Browse in Sourcegraph](https://sourcegraph.com/github.com/rvantonder/ocaml@4.08/-/blob/stdlib/buffer.ml?diff=dceeb8301f68a92ae9c739813eb842c4b153a08f)
 
-- Or on GitHub if you have the [Sourcegraph browser extension](https://docs.sourcegraph.com/integration/browser_extension) installed:
+    - [After installing the Sourcegraph browser extension](https://docs.sourcegraph.com/integration/browser_extension), browse [in GitHub](https://github.com/rvantonder/ocaml/blob/4.08/stdlib/buffer.ml)
+    
+- Jane Street `base/src` [v0.12.2](https://github.com/rvantonder/base/blob/v0.12.2/src/container.ml)
+- An example commit in [pyre-check](https://sourcegraph.com/github.com/rvantonder/pyre-check/-/commit/623a5dc9ecb71846ae045ef924d4c7122a32b294)
 
 
 ## Quickstart : generate LSIF dump
@@ -32,7 +38,7 @@ Try hovering on files in the `stdlib` folder for OCaml 4.08:
 
 ## Quickstart : upload your LSIF dump
 
-You can surface LSIF data in the browser with Sourcegraph. Type-on-hover is currently supported (cross-file and cross-repo jump to definition is planned).
+You can surface LSIF data in the browser with Sourcegraph. Type-on-hover is currently supported (cross-file and cross-repo jump to definition is on the horizon).
 
 1. Generate an upload token:
     1. Visit https://sourcegraph.com/github.com/your-username/your-repo. Wait a few seconds for your repo to be indexed if needed, and then refresh.
@@ -90,19 +96,15 @@ You can surface LSIF data in the browser with Sourcegraph. Type-on-hover is curr
 
 - The `lsif.data` file is connected to a specific commit. You can upload different `data.lsif` for each commit (in feature branches, etc.)
 - Make sure you are browsing the repository at the same commit you uploaded the LSIF data for. Sourcegraph will fall back to heuristics for commits that do not have LSIF data.
-- Upload size for a `data.lsif` file is currently limited to 100MB (limit increases and compression is work-in-progress)
+- You do not have to index an entire project. For example, you might want to index only changed files for a new commit in a fresh branch or PR
+- Upload size for a `data.lsif` file is currently limited to 100MB (limit increases and compression support is work-in-progress)
 
 ## FAQ
 
 #### Generating LSIF takes a while, how can I make it faster?
 
-Initially generating an LSIF file can take some time (20 minutes or more for large projects). You can speed it up with `lsif-ocaml-dump -p` to generate `*.lsif.in` files in a parallel frenzy. Note that once every `.ml*` file is processed, `*.lsif.in` files only need to be updated for changed files. Easily regenerate a smaller number of files by running `lsif-ocaml-dump` in subdirectories, or with, e.g.,:
+Initially generating an LSIF file can take some time (20 minutes on a Macbook for large projects). You can speed it up with `lsif-ocaml-dump -p` to generate `*.lsif.in` files in a (less stable) parallel frenzy. Note that once every `.ml*` file is processed, `*.lsif.in` files only need to be updated for changed files. Easily regenerate a smaller number of files by running `lsif-ocaml-dump` in subdirectories, or with, e.g.,:
 
 ```
 cat updated-file.ml | ocamlmerlin-with-lsif server lsif update-file.ml -dot-merlin ./path/where/update-file/lives/.merlin > updated-file.ml.lsif.in
 ```
-
-#### How can I exclude directories?
-
-See `lsif-ocaml-dump -h`, and the `-exclude` option when generating `lsif.in` files. See `lsif-ocaml -help` and `-exclude` to exclude `lsif.in` files from being generated in `data.lsif`. By default, `_build` and `*test*` directories are excluded.
-

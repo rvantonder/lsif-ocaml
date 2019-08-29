@@ -2,6 +2,8 @@
 
 **Surface OCaml type hovers and jump-to-definitions using LSIF (in your browser).**
 
+Note: development is early work-in-progress; the tool is released in the interest of early adopters who may find it immediately useful for open source projects.
+
 <img src="https://user-images.githubusercontent.com/888624/63965007-4d11d500-ca66-11e9-8db5-4d943e8400b0.gif" width="600">
 <img src="https://user-images.githubusercontent.com/888624/63966981-703e8380-ca6a-11e9-8c21-ddc37bec44eb.gif" width="600">
 
@@ -9,7 +11,7 @@
 
 > The Language Server Index Format (LSIF) is a format for storing code intelligence data like type hovers and jump-to-definitions. See [LSIF](https://github.com/Microsoft/language-server-protocol/blob/master/indexFormat/specification.md) and how it relates to [LSP](https://microsoft.github.io/language-server-protocol/) for more details.
 
-Note: development is early work-in-progress; the tool is released in the interest of early adopters who may find it immediately useful for open source projects.
+
 
 ## Examples
 

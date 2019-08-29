@@ -4,8 +4,8 @@
 
 Note: development is early work-in-progress; the tool is released in the interest of early adopters who may find it immediately useful for open source projects.
 
-<img src="https://user-images.githubusercontent.com/888624/63965007-4d11d500-ca66-11e9-8db5-4d943e8400b0.gif" width="600">
-<img src="https://user-images.githubusercontent.com/888624/63966981-703e8380-ca6a-11e9-8c21-ddc37bec44eb.gif" width="600">
+<img src="https://user-images.githubusercontent.com/888624/63965007-4d11d500-ca66-11e9-8db5-4d943e8400b0.gif" width="800">
+<img src="https://user-images.githubusercontent.com/888624/63966981-703e8380-ca6a-11e9-8c21-ddc37bec44eb.gif" width="800">
 
 > What is LSIF?
 
@@ -96,7 +96,7 @@ You can surface LSIF data in the browser with Sourcegraph. Type-on-hover is curr
 
 **Important notes:**
 
-- The `lsif.data` file is connected to a specific commit. You can upload different `data.lsif` for each commit (in feature branches, etc.)
+- The `lsif.data` file is connected to a specific commit. You can upload different `data.lsif` for each commit (in feature branches, etc.). Uploading a new version overwrites the previous version for that commit.
 - Make sure you are browsing the repository at the same commit you uploaded the LSIF data for. Sourcegraph will fall back to heuristics for commits that do not have LSIF data.
 - You do not have to index an entire project. For example, you might want to index only changed files for a new commit in a fresh branch or PR
 - Upload size for a `data.lsif` file is currently limited to 100MB (limit increases and compression support is work-in-progress)

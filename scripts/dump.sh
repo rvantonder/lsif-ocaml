@@ -51,7 +51,7 @@ i=0
 for f in $FILES; do
   FILE_DIR=$(dirname $f)
   if [[ -f "$FILE_DIR/.merlin" ]]; then
-    ((i++))
+    ((i++)) || true
     printf "(%4d/%4d) %s\n" "$i" "$N_FILES" "$f"
    if [ -z "$PARALLEL_FRENZY" ]; then
       cat "$f" | $MERLIN_LSIF_BINARY server lsif "$f" "-dot-merlin" "$FILE_DIR/.merlin" > "$f.lsif.in"
@@ -59,7 +59,7 @@ for f in $FILES; do
       cat "$f" | $MERLIN_LSIF_BINARY server lsif "$f" "-dot-merlin" "$FILE_DIR/.merlin" > "$f.lsif.in" 2> /dev/null &
     fi
   else
-    ((i++))
+    ((i++)) || true
     printf "(%4d/%4d) %s (skipped, no .merlin)\n" "$i" "$N_FILES" "$f"
   fi
 done

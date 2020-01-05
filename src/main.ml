@@ -48,46 +48,46 @@ module Export = struct
     ; entry_type : string [@key "type"]
     ; label : string
     ; result : result option
-          [@default None]
+               [@default None]
     ; start : location option
-          [@default None]
+              [@default None]
     ; end_ : location option
-          [@key "end"]
-          [@default None]
+             [@key "end"]
+             [@default None]
     ; version : string option
-          [@default None]
+                [@default None]
     ; project_root : string option
-          [@key "projectRoot"]
-          [@default None]
+                     [@key "projectRoot"]
+                     [@default None]
     ; position_encoding : string option
-          [@key "positionEncoding"]
-          [@default None]
+                          [@key "positionEncoding"]
+                          [@default None]
     ; tool_info : tool_info option
-          [@key "toolInfo"]
-          [@default None]
+                  [@key "toolInfo"]
+                  [@default None]
     ; kind : string option
-          [@default None]
+             [@default None]
     ; uri : string option
-          [@default None]
+            [@default None]
     ; language_id : string option
-          [@key "languageId"]
-          [@default None]
+                    [@key "languageId"]
+                    [@default None]
     ; contents : string option
-          [@default None]
+                 [@default None]
     ; out_v : string option
-          [@key "outV"]
-          [@default None]
+              [@key "outV"]
+              [@default None]
     ; in_v : string option
-          [@key "inV"]
-          [@default None]
+             [@key "inV"]
+             [@default None]
     ; out_vs : string list option
-          [@key "outVs"]
-          [@default None]
+               [@key "outVs"]
+               [@default None]
     ; in_vs : string list option
-          [@key "inVs"]
-          [@default None]
-    ; document : int option
-          [@default None]
+              [@key "inVs"]
+              [@default None]
+    ; document : string option
+                 [@default None]
     }
   [@@deriving to_yojson]
 
@@ -441,7 +441,7 @@ let main host project_root exclude_directories local_absolute_root strip_prefix 
         end;
       if emit_definitions then
         begin
-          let definitions =
+          let definitions : Export.entry list =
             List.concat_map
               definitions
               ~f:(fun
@@ -449,7 +449,8 @@ let main host project_root exclude_directories local_absolute_root strip_prefix 
                    ; declaration_range_vertex
                    ; reference_range_vertex
                    ; definition_result_vertex
-                   ; destination_file } ->
+                   ; destination_file
+                   } ->
                    let declaration_result_set_vertex = { declaration_result_set_vertex with id = fresh () } in
                    let declaration_range_vertex = { declaration_range_vertex with id = fresh () } in
                    let reference_range_vertex = { reference_range_vertex with id = fresh () } in
@@ -488,48 +489,69 @@ let main host project_root exclude_directories local_absolute_root strip_prefix 
                        match String.Table.find document_id_table destination_file with
                        | Some id ->
                          (* Case where this was already printed the previous time we added to the table. *)
-                         { document with id = Int.to_string id }
+                         Some { document with id = Int.to_string id }
                        | None ->
-                         let relative_filepath =
-                           match String.chop_prefix destination_file ~prefix:strip_prefix with
-                           | Some relative_filepath_in_project_path ->
-                             relative_filepath_in_project_path
-                           | None ->
-                             (* A different path, probably in .opam for external libraries. *)
-                             destination_file
-                         in
-                         let document = make_document host project_root relative_filepath absolute_filepath in
-                         let id = Int.of_string (fresh ()) in
-                         String.Table.add_exn document_id_table ~key:destination_file ~data:id;
-                         let document = { document with id = Int.to_string id } in
-                         Format.printf "%s@." @@ print document;
-                         let document_in_project_edge =
-                           connect ~out_v:project.id ~in_vs:[document.id] ~label:"contains" ()
-                         in
-                         Format.printf "%s@." @@ print document_in_project_edge;
-                         document
+                         match String.chop_prefix destination_file ~prefix:strip_prefix with
+                         | None ->
+                           (* A different path, probably in .opam for external libraries. *)
+                           (*destination_file*)
+                           None
+                         | Some relative_filepath ->
+                           let document = make_document host project_root relative_filepath absolute_filepath in
+                           let id = Int.of_string (fresh ()) in
+                           String.Table.add_exn document_id_table ~key:destination_file ~data:id;
+                           let document = { document with id = Int.to_string id } in
+                           Format.printf "%s@." @@ print document;
+                           let document_in_project_edge =
+                             connect ~out_v:project.id ~in_vs:[document.id] ~label:"contains" ()
+                           in
+                           Format.printf "%s@." @@ print document_in_project_edge;
+                           Some document
                      in
                      (* Add "item" edge to connect the definitionResult vertex to the range for a particular document (id). *)
-                     connect
-                       ~out_v:definition_result_vertex.id
-                       ~in_vs:[declaration_range_vertex.id]
-                       ~document:(Int.of_string document.id)
-                       ~label:"item"
-                       ()
+                     match document with
+                     | None -> None
+                     | Some document ->
+                       Some (connect
+                               ~out_v:definition_result_vertex.id
+                               ~in_vs:[declaration_range_vertex.id]
+                               ~document:document.id
+                               ~label:"item"
+                               ())
                    in
-                   let single_definition_result =
-                     [ declaration_result_set_vertex
-                     ; declaration_range_vertex
-                     ; declaration_result_set_to_declaration_range_edge
-                     ; reference_range_vertex
-                     ; declaration_result_set_to_reference_range_edge
-                     ; definition_result_vertex
-                     ; definition_result_to_declaration_result_set_edge
-                     ; definition_result_to_document_and_range
-                     ]
+                   let declaration_range = match declaration_range_vertex with
+                     | { start = None; _ } -> None
+                     | { start = Some { line; character = (-1) }; _ } -> None
+                     | x -> Some x
                    in
-                   List.iter single_definition_result ~f:(fun entry -> Format.printf "%s@." @@ print entry);
-                   single_definition_result)
+                   let reference_range = match reference_range_vertex with
+                     | { start = None; _ } -> None
+                     | { start = Some { line; character = (-1) }; _ } -> None
+                     | x -> Some x
+                   in
+                   match
+                     definition_result_to_document_and_range,
+                     declaration_range,
+                     reference_range
+                   with
+                   | None, _, _
+                   | _, None, _
+                   | _, _, None
+                     -> []
+                   | Some definition_result_to_document_and_range, Some _, Some _ ->
+                     let single_definition_result =
+                       [ declaration_result_set_vertex
+                       ; declaration_range_vertex
+                       ; declaration_result_set_to_declaration_range_edge
+                       ; reference_range_vertex
+                       ; declaration_result_set_to_reference_range_edge
+                       ; definition_result_vertex
+                       ; definition_result_to_declaration_result_set_edge
+                       ; definition_result_to_document_and_range
+                       ]
+                     in
+                     List.iter single_definition_result ~f:(fun entry -> Format.printf "%s@." @@ print entry);
+                     single_definition_result)
           in
           if definitions <> [] then
             let edges_entry = connect_ranges definitions document.id in

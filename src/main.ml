@@ -1,6 +1,8 @@
 open Core
 open Command.Let_syntax
 
+open Polymorphic_compare
+
 module Json = Yojson.Safe
 
 let debug = Option.is_some (Sys.getenv "DEBUG_OCAML_LSIF")
